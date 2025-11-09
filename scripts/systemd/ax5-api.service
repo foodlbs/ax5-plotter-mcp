@@ -1,0 +1,26 @@
+[Unit]
+Description=AX5 Plotter API Server
+After=network.target redis.service
+Requires=redis.service
+
+[Service]
+Type=simple
+User=zimaboard
+Group=zimaboard
+WorkingDirectory=/home/zimaboard/ax5-plotter-mcp
+Environment="PATH=/home/zimaboard/ax5-plotter-mcp/.venv/bin"
+
+# Run the FastAPI server
+ExecStart=/home/zimaboard/ax5-plotter-mcp/.venv/bin/uvicorn src.api.main:app --host 0.0.0.0 --port 8000
+
+# Restart on failure
+Restart=always
+RestartSec=10
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ax5-api
+
+[Install]
+WantedBy=multi-user.target

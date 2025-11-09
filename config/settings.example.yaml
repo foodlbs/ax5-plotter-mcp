@@ -1,0 +1,139 @@
+# AX5 Plotter Configuration
+
+plotter:
+  # Serial connection settings
+  port: /dev/ttyUSB0  # Change to your Arduino port (check with: ls -l /dev/ttyUSB*)
+  baud: 115200
+  timeout: 5  # seconds
+  
+  # Plotter dimensions (A5 size)
+  dimensions:
+    width: 210   # mm
+    height: 150  # mm
+    margin: 10   # mm
+  
+  # GRBL settings for AX5
+  grbl:
+    laser_mode: 0           # MUST be 0 for servo control
+    max_rate_x: 3000        # mm/min
+    max_rate_y: 3000
+    max_rate_z: 500
+    acceleration_x: 200     # mm/s²
+    acceleration_y: 200
+    max_travel_x: 210
+    max_travel_y: 150
+    status_report: 3        # Report both machine and work positions
+
+servo:
+  # Servo control settings
+  pen_up_command: "M3 S90"       # G-code for pen up
+  pen_down_command: "M5"         # G-code for pen down
+  dwell_time: 0.15               # Seconds to wait after servo movement
+  
+  # Pen type profiles
+  profiles:
+    marker:
+      dwell: 0.1
+      speed: 800
+    ballpoint:
+      dwell: 0.15
+      speed: 500
+    fountain:
+      dwell: 0.2
+      speed: 300
+
+speeds:
+  travel: 3000      # Pen up movement speed (mm/min)
+  draw: 500         # Default drawing speed (mm/min)
+  homing: 2000      # Homing cycle speed (mm/min)
+
+optimization:
+  # Path optimization settings
+  merge_tolerance: 0.1        # mm - connect paths closer than this
+  simplify_tolerance: 0.05    # mm - reduce points
+  use_line_sort: true         # Sort paths to minimize travel
+  use_tsp: true               # Use TSP solver for optimal ordering
+  reloop: true                # Randomize seam positions
+
+api:
+  # REST API settings
+  host: 0.0.0.0
+  port: 8000
+  cors_origins:
+    - http://localhost:3000   # React dev server
+    - http://localhost:8080   # Alternative frontend
+  upload_dir: uploads
+  output_dir: output
+  max_upload_size: 10485760   # 10 MB
+
+redis:
+  # Redis connection for job queue
+  host: localhost
+  port: 6379
+  db: 0
+  password: null  # Set if Redis requires authentication
+
+queue:
+  # Job queue settings
+  default_timeout: 1800       # 30 minutes
+  result_ttl: 86400           # 24 hours
+  job_monitoring_interval: 0.5 # seconds
+  
+  # Retry policy
+  retry_max: 3
+  retry_intervals:
+    - 10    # First retry after 10 seconds
+    - 60    # Second retry after 1 minute
+    - 300   # Third retry after 5 minutes
+
+mcp:
+  # MCP server settings
+  name: "AX5 Plotter Control"
+  version: "1.0.0"
+  transport: stdio  # or "streamable-http"
+  http_port: 8001   # Only used if transport is HTTP
+
+logging:
+  level: INFO  # DEBUG, INFO, WARNING, ERROR
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  file: logs/ax5_plotter.log
+  max_bytes: 10485760  # 10 MB
+  backup_count: 5
+
+auth:
+  # Authentication settings for public server
+  enabled: true  # Set to false for local-only operation
+  secret_key: "CHANGE_THIS_TO_RANDOM_SECRET"  # Generate with: openssl rand -hex 32
+  database_url: "sqlite:///users.db"
+  token_expire_minutes: 10080  # 7 days
+  
+  # Default rate limits for new users
+  default_jobs_per_hour: 10
+  default_jobs_per_day: 50
+  default_max_job_duration: 3600  # seconds
+  
+  # OAuth providers (optional)
+  oauth_enabled: false
+  google_client_id: null
+  github_client_id: null
+
+ssl:
+  # HTTPS/SSL settings for production
+  enabled: false
+  cert_file: /path/to/cert.pem
+  key_file: /path/to/key.pem
+  # For Let's Encrypt, use certbot:
+  # sudo certbot certonly --standalone -d your-domain.com
+
+database:
+  # Optional SQLite database for job history
+  enabled: true
+  url: "sqlite:///plotter_jobs.db"
+  # For PostgreSQL: "postgresql://user:password@localhost/plotter_db"
+
+safety:
+  # Safety limits and checks
+  check_limits: true
+  emergency_stop_enabled: true
+  max_job_duration: 7200  # 2 hours maximum per job
+  require_homing: false   # Require homing before first plot
