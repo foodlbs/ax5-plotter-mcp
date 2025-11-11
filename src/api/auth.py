@@ -14,9 +14,21 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
 import yaml
 
-# Load configuration
-with open('config/settings.yaml', 'r') as f:
-    config = yaml.safe_load(f)
+# Load configuration with error handling
+try:
+    with open('config/settings.yaml', 'r') as f:
+        config = yaml.safe_load(f)
+except FileNotFoundError:
+    # Use default values if config file not found
+    config = {
+        'auth': {
+            'database_url': 'sqlite:///users.db',
+            'secret_key': 'development-secret-key-change-in-production',
+            'token_expire_minutes': 10080
+        }
+    }
+except yaml.YAMLError as e:
+    raise RuntimeError(f"Error parsing configuration file: {e}")
 
 # Database setup
 Base = declarative_base()
@@ -259,7 +271,7 @@ def init_admin_user():
     db = SessionLocal()
     
     # Check if any admin exists
-    admin = db.query(User).filter(User.is_admin == True).first()
+    admin = db.query(User).filter(User.is_admin.is_(True)).first()
     
     if not admin:
         print("Creating default admin user...")

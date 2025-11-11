@@ -346,7 +346,7 @@ async def delete_user(
     
     if user.is_admin:
         # Check if this is the last admin
-        admin_count = db.query(User).filter(User.is_admin == True).count()
+        admin_count = db.query(User).filter(User.is_admin.is_(True)).count()
         if admin_count <= 1:
             raise HTTPException(
                 status.HTTP_400_BAD_REQUEST,

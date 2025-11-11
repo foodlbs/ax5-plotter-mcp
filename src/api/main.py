@@ -7,10 +7,13 @@ import uuid
 import logging
 from typing import Optional
 from datetime import datetime
+from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, UploadFile, File, BackgroundTasks
+from fastapi import FastAPI, HTTPException, UploadFile, File, BackgroundTasks, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
 from pydantic import BaseModel, Field
 import yaml
 from redis import Redis
@@ -33,9 +36,17 @@ from src.api.auth_routes import router as auth_router
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Load configuration
-with open('config/settings.yaml', 'r') as f:
-    config = yaml.safe_load(f)
+# Load configuration with error handling
+try:
+    with open('config/settings.yaml', 'r') as f:
+        config = yaml.safe_load(f)
+except FileNotFoundError:
+    logger.error("Configuration file not found: config/settings.yaml")
+    logger.error("Please copy config/settings.example.yaml to config/settings.yaml")
+    raise
+except yaml.YAMLError as e:
+    logger.error(f"Error parsing configuration file: {e}")
+    raise
 
 # Initialize FastAPI
 app = FastAPI(
@@ -43,6 +54,27 @@ app = FastAPI(
     description="REST API for controlling AX5 pen plotter",
     version="1.0.0"
 )
+
+
+# Security headers middleware
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    """Add security headers to all responses."""
+    
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        
+        # Add security headers
+        response.headers['X-Content-Type-Options'] = 'nosniff'
+        response.headers['X-Frame-Options'] = 'DENY'
+        response.headers['X-XSS-Protection'] = '1; mode=block'
+        response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
+        response.headers['Content-Security-Policy'] = "default-src 'self'"
+        
+        return response
+
+
+# Add security headers middleware
+app.add_middleware(SecurityHeadersMiddleware)
 
 # CORS middleware
 app.add_middleware(
@@ -56,18 +88,30 @@ app.add_middleware(
 # Include authentication routes
 app.include_router(auth_router)
 
-# Redis and RQ setup
-redis_conn = Redis(
-    host=config['redis']['host'],
-    port=config['redis']['port'],
-    db=config['redis']['db'],
-    password=config['redis']['password'],
-    decode_responses=True
-)
+# Redis and RQ setup with error handling
+try:
+    redis_conn = Redis(
+        host=config['redis']['host'],
+        port=config['redis']['port'],
+        db=config['redis']['db'],
+        password=config['redis']['password'],
+        decode_responses=True,
+        socket_connect_timeout=5,
+        socket_timeout=5,
+        retry_on_timeout=True
+    )
+    # Test connection
+    redis_conn.ping()
+    logger.info(f"Connected to Redis at {config['redis']['host']}:{config['redis']['port']}")
+except Exception as e:
+    logger.error(f"Failed to connect to Redis: {e}")
+    logger.error("Job queue functionality will be unavailable")
+    redis_conn = None
+    redis_conn = None
 
-high_queue = Queue('high', connection=redis_conn)
-normal_queue = Queue('normal', connection=redis_conn)
-low_queue = Queue('low', connection=redis_conn)
+high_queue = Queue('high', connection=redis_conn) if redis_conn else None
+normal_queue = Queue('normal', connection=redis_conn) if redis_conn else None
+low_queue = Queue('low', connection=redis_conn) if redis_conn else None
 
 
 # Request/Response Models
@@ -111,6 +155,77 @@ class PlotterStatus(BaseModel):
     connected: bool
 
 
+# Helper Functions
+
+def validate_file_path(file_path: str, allowed_dirs: list) -> str:
+    """
+    Validate that a file path is safe and within allowed directories.
+    
+    Args:
+        file_path: Path to validate
+        allowed_dirs: List of allowed base directories
+        
+    Returns:
+        Absolute normalized path
+        
+    Raises:
+        HTTPException: If path is invalid or outside allowed directories
+    """
+    try:
+        # Normalize path and make it absolute
+        abs_path = Path(file_path).resolve()
+        
+        # Check if path exists
+        if not abs_path.exists():
+            raise HTTPException(404, f"File not found: {file_path}")
+        
+        # Check if it's within allowed directories
+        allowed = False
+        for allowed_dir in allowed_dirs:
+            allowed_abs = Path(allowed_dir).resolve()
+            try:
+                abs_path.relative_to(allowed_abs)
+                allowed = True
+                break
+            except ValueError:
+                continue
+        
+        if not allowed:
+            raise HTTPException(403, "Access to file path not allowed")
+        
+        return str(abs_path)
+        
+    except Exception as e:
+        if isinstance(e, HTTPException):
+            raise
+        raise HTTPException(400, f"Invalid file path: {str(e)}")
+
+
+def sanitize_filename(filename: str) -> str:
+    """
+    Sanitize filename to prevent path traversal.
+    
+    Args:
+        filename: Original filename
+        
+    Returns:
+        Sanitized filename
+    """
+    # Remove path components
+    filename = os.path.basename(filename)
+    
+    # Remove any dangerous characters
+    import re
+    filename = re.sub(r'[^\w\s\-\.]', '', filename)
+    
+    # Limit length
+    if len(filename) > 255:
+        name, ext = os.path.splitext(filename)
+        filename = name[:250] + ext
+    
+    return filename
+
+
 # API Endpoints
 
 @app.get("/")
@@ -135,15 +250,27 @@ async def submit_plot(
     Requires authentication. Returns job ID and initial status.
     Rate limited based on user account settings.
     """
+    # Check if Redis is available
+    if redis_conn is None or high_queue is None:
+        raise HTTPException(503, "Job queue service is unavailable")
+    
     # Check rate limit
     check_rate_limit(current_user, "submit_plot", db)
     
-    # Validate file exists
-    if not os.path.exists(request.svg_file):
-        raise HTTPException(404, f"File not found: {request.svg_file}")
+    # Validate and sanitize file path
+    allowed_dirs = [
+        config['api']['upload_dir'],
+        config['api'].get('allowed_svg_dirs', [])
+    ]
+    if isinstance(allowed_dirs[1], list):
+        allowed_dirs = [allowed_dirs[0]] + allowed_dirs[1]
+    else:
+        allowed_dirs = [allowed_dirs[0]]
+    
+    validated_path = validate_file_path(request.svg_file, allowed_dirs)
     
     # Validate file extension
-    if not request.svg_file.lower().endswith('.svg'):
+    if not validated_path.lower().endswith('.svg'):
         raise HTTPException(400, "File must be SVG format")
     
     # Select queue by priority
@@ -157,7 +284,7 @@ async def submit_plot(
     # Enqueue job with user info
     job = queue.enqueue(
         process_plot_job,
-        request.svg_file,
+        validated_path,  # Use validated path
         options={
             'pen_type': request.pen_type,
             'optimize': request.optimize
@@ -171,7 +298,7 @@ async def submit_plot(
     current_user.total_jobs += 1
     db.commit()
     
-    logger.info(f"Job {job.id} enqueued by user {current_user.username} for {request.svg_file}")
+    logger.info(f"Job {job.id} enqueued by user {current_user.username} for {validated_path}")
     
     return PlotResponse(
         job_id=job.id,
@@ -192,13 +319,22 @@ async def upload_svg(
     Requires authentication.
     """
     # Validate file type
-    if not file.filename.endswith('.svg'):
+    sanitized_filename = sanitize_filename(file.filename)
+    if not sanitized_filename.endswith('.svg'):
         raise HTTPException(400, "File must be SVG format")
     
     # Check file size
     content = await file.read()
     if len(content) > config['api']['max_upload_size']:
         raise HTTPException(413, "File too large")
+    
+    # Validate content is valid SVG (basic check)
+    try:
+        content_str = content.decode('utf-8')
+        if '<svg' not in content_str.lower():
+            raise HTTPException(400, "File does not appear to be valid SVG")
+    except UnicodeDecodeError:
+        raise HTTPException(400, "File must be UTF-8 encoded text")
     
     # Save file with user prefix
     upload_dir = config['api']['upload_dir']

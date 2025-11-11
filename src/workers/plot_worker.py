@@ -143,9 +143,17 @@ def process_plot_job(svg_file: str, options: dict = None) -> dict:
 
 def main():
     """Start RQ worker."""
-    # Load configuration
-    with open('config/settings.yaml', 'r') as f:
-        config = yaml.safe_load(f)
+    # Load configuration with error handling
+    try:
+        with open('config/settings.yaml', 'r') as f:
+            config = yaml.safe_load(f)
+    except FileNotFoundError:
+        logger.error("Configuration file not found: config/settings.yaml")
+        logger.error("Please copy config/settings.example.yaml to config/settings.yaml")
+        raise
+    except yaml.YAMLError as e:
+        logger.error(f"Error parsing configuration file: {e}")
+        raise
     
     redis_config = config['redis']
     

@@ -27,9 +27,17 @@ from src.workers.plot_worker import process_plot_job
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Load configuration
-with open('config/settings.yaml', 'r') as f:
-    config = yaml.safe_load(f)
+# Load configuration with error handling
+try:
+    with open('config/settings.yaml', 'r') as f:
+        config = yaml.safe_load(f)
+except FileNotFoundError:
+    logger.error("Configuration file not found: config/settings.yaml")
+    logger.error("Please copy config/settings.example.yaml to config/settings.yaml")
+    raise
+except yaml.YAMLError as e:
+    logger.error(f"Error parsing configuration file: {e}")
+    raise
 
 # Initialize MCP server
 mcp = FastMCP("AX5 Plotter Control")
