@@ -1,0 +1,61 @@
+# Requirements for Simple AX5 Plotter Application
+# Simple local app for converting photos to sketches and plotting on AX5
+
+# ============================================================================
+# GUI DEPENDENCY (must be installed separately on some systems)
+# ============================================================================
+# tkinter - Python's standard GUI library
+#   macOS:    brew install python-tk@3.11
+#   Ubuntu:   sudo apt-get install python3-tk
+#   Windows:  Usually included with Python installer
+
+# ============================================================================
+# REQUIRED DEPENDENCIES
+# ============================================================================
+
+# Configuration and data handling
+pyyaml>=6.0.1              # YAML configuration file parsing
+
+# Serial communication with Arduino/GRBL
+pyserial>=3.5              # Serial port communication
+
+# Image processing and computer vision
+opencv-python>=4.8.0       # Image processing, edge detection, webcam
+numpy>=1.24.0              # Numerical operations for image arrays
+pillow>=10.0.0             # Additional image format support, PIL for tkinter
+
+# SVG and G-code generation
+vpype>=1.13.0              # SVG optimization and processing
+vpype-gcode>=0.2.0         # Convert optimized SVG to G-code
+svgpathtools>=1.5.1        # SVG path manipulation
+
+# ============================================================================
+# OPTIONAL DEPENDENCIES (commented out by default)
+# ============================================================================
+
+# Advanced path optimization (slower but better quality)
+# ortools>=9.7.0           # Google's OR-Tools for TSP optimization
+# networkx>=3.1            # Graph algorithms for path planning
+
+# Development and testing
+# pytest>=7.4.0            # Testing framework
+# pytest-asyncio>=0.21.0   # Async testing support
+# black>=23.9.0            # Code formatting
+# ruff>=0.1.0              # Fast Python linter
+
+# ============================================================================
+# INSTALLATION NOTES
+# ============================================================================
+# 
+# Quick install:
+#   pip install -r requirements-simple.txt
+#
+# If you get import errors, ensure tkinter is installed (see top of file)
+#
+# For webcam issues on Linux:
+#   sudo apt-get install libv4l-dev
+#
+# For better SVG optimization (optional):
+#   pip install ortools networkx
+#
+# ============================================================================
