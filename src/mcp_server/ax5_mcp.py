@@ -8,6 +8,7 @@ import os
 import sys
 import logging
 from typing import Optional
+from pathlib import Path
 import asyncio
 
 from mcp.server.fastmcp import FastMCP, Context
@@ -86,6 +87,46 @@ normal_queue = Queue('normal', connection=redis_conn)
 low_queue = Queue('low', connection=redis_conn)
 
 
+# Helper Functions
+
+def validate_svg_path(svg_file: str) -> str:
+    """
+    Validate SVG file path for MCP operations.
+    
+    Args:
+        svg_file: Path to validate
+        
+    Returns:
+        Validated absolute path
+        
+    Raises:
+        FileNotFoundError: If file doesn't exist or is invalid
+        ValueError: If file is not an SVG
+    """
+    try:
+        # Resolve to absolute path
+        abs_path = Path(svg_file).resolve()
+        
+        # Check if exists
+        if not abs_path.exists():
+            raise FileNotFoundError(f"SVG file not found: {svg_file}")
+        
+        # Check if it's a file
+        if not abs_path.is_file():
+            raise ValueError("Path must be a file")
+        
+        # Check extension
+        if not str(abs_path).lower().endswith('.svg'):
+            raise ValueError("File must be SVG format")
+        
+        return str(abs_path)
+        
+    except (FileNotFoundError, ValueError):
+        raise
+    except Exception as e:
+        raise ValueError(f"Invalid file path: {str(e)}")
+
+
 # MCP Tools
 
 @mcp.tool()
@@ -147,16 +188,17 @@ async def submit_plot_job(
     
     Returns job ID and status. Use get_job_status() to monitor progress.
     """
-    # Validate file
-    if not os.path.exists(svg_file):
-        await ctx.error(f"File not found: {svg_file}")
-        raise FileNotFoundError(f"SVG file not found: {svg_file}")
+    # Validate file path
+    try:
+        validated_path = validate_svg_path(svg_file)
+    except FileNotFoundError as e:
+        await ctx.error(str(e))
+        raise
+    except ValueError as e:
+        await ctx.error(str(e))
+        raise
     
-    if not svg_file.lower().endswith('.svg'):
-        await ctx.error("File must be SVG format")
-        raise ValueError("File must be SVG format")
-    
-    await ctx.info(f"Submitting plot job for {svg_file}")
+    await ctx.info(f"Submitting plot job for {validated_path}")
     
     # Select queue
     if priority == "high":
@@ -169,7 +211,7 @@ async def submit_plot_job(
     # Enqueue job
     job = queue.enqueue(
         process_plot_job,
-        svg_file,
+        validated_path,  # Use validated path
         options={
             'pen_type': pen_type,
             'optimize': optimize
@@ -342,7 +384,8 @@ async def list_jobs(
                         "progress": job.meta.get('progress', 0),
                         "stage": job.meta.get('stage')
                     })
-                except:
+                except Exception as e:
+                    logger.debug(f"Failed to fetch job {job_id}: {e}")
                     pass
     
     await ctx.info(f"Found {len(jobs)} jobs")

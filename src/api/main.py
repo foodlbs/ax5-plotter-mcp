@@ -161,6 +161,13 @@ def validate_file_path(file_path: str, allowed_dirs: list) -> str:
     """
     Validate that a file path is safe and within allowed directories.
     
+    This function intentionally allows user-provided file paths but ensures
+    they are constrained to allowed directories through path resolution and
+    validation. CodeQL may flag this as path injection, but it's mitigated by:
+    1. Resolving paths to absolute form to prevent traversal
+    2. Validating paths are within allowed directories before any file operations
+    3. Checking file type after validation
+    
     Args:
         file_path: Path to validate
         allowed_dirs: List of allowed base directories
@@ -172,18 +179,15 @@ def validate_file_path(file_path: str, allowed_dirs: list) -> str:
         HTTPException: If path is invalid or outside allowed directories
     """
     try:
-        # Normalize path and make it absolute
+        # Normalize path and make it absolute (resolves .. and symlinks)
         abs_path = Path(file_path).resolve()
         
-        # Check if path exists
-        if not abs_path.exists():
-            raise HTTPException(404, f"File not found: {file_path}")
-        
-        # Check if it's within allowed directories
+        # Check if it's within allowed directories BEFORE any file operations
         allowed = False
         for allowed_dir in allowed_dirs:
             allowed_abs = Path(allowed_dir).resolve()
             try:
+                # This will raise ValueError if abs_path is not under allowed_abs
                 abs_path.relative_to(allowed_abs)
                 allowed = True
                 break
@@ -193,12 +197,21 @@ def validate_file_path(file_path: str, allowed_dirs: list) -> str:
         if not allowed:
             raise HTTPException(403, "Access to file path not allowed")
         
+        # Now safe to check if path exists (after validation)
+        # CodeQL: Path injection is mitigated by the allowed directory check above
+        if not abs_path.exists():
+            raise HTTPException(404, f"File not found")
+        
+        # Verify it's a file, not a directory
+        if not abs_path.is_file():
+            raise HTTPException(400, "Path must be a file")
+        
         return str(abs_path)
         
     except Exception as e:
         if isinstance(e, HTTPException):
             raise
-        raise HTTPException(400, f"Invalid file path: {str(e)}")
+        raise HTTPException(400, f"Invalid file path")
 
 
 def sanitize_filename(filename: str) -> str:
@@ -496,7 +509,8 @@ async def list_jobs(
                         "progress": job.meta.get('progress', 0),
                         "enqueued_at": job.enqueued_at.isoformat() if job.enqueued_at else None
                     })
-                except:
+                except Exception as e:
+                    logger.debug(f"Failed to fetch job {job_id}: {e}")
                     pass
     
     return jobs
@@ -577,18 +591,22 @@ async def control_pen(down: bool):
 async def health_check():
     """Health check endpoint."""
     try:
-        redis_conn.ping()
-        redis_ok = True
-    except:
+        if redis_conn:
+            redis_conn.ping()
+            redis_ok = True
+        else:
+            redis_ok = False
+    except Exception as e:
+        logger.debug(f"Redis health check failed: {e}")
         redis_ok = False
     
     return {
         "status": "healthy" if redis_ok else "degraded",
         "redis": "connected" if redis_ok else "disconnected",
         "queues": {
-            "high": high_queue.count,
-            "normal": normal_queue.count,
-            "low": low_queue.count
+            "high": high_queue.count if high_queue else 0,
+            "normal": normal_queue.count if normal_queue else 0,
+            "low": low_queue.count if low_queue else 0
         }
     }
 
