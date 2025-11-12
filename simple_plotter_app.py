@@ -34,6 +34,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
 
 from src.plotter.ax5 import AX5Plotter
 from src.utils.svg_converter import SVGConverter
+from src.utils.ai_caricature_generator import AICaricatureGenerator, AIProvider
 
 # Setup logging
 logging.basicConfig(
@@ -126,7 +127,7 @@ class ImageProcessor:
         Convert processed image to SVG format.
         
         Args:
-            image: Processed image array
+            image: Processed image array (should be binary with black lines)
             output_path: Path to save SVG
             width_mm: Target width in mm
             height_mm: Target height in mm
@@ -134,10 +135,38 @@ class ImageProcessor:
         Returns:
             str: Path to created SVG file
         """
-        # Find contours in the image - use RETR_LIST to get all contours, not just external
+        # Ensure image is binary
+        if len(image.shape) == 3:
+            image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        
+        logger.info(f"Image shape: {image.shape}, dtype: {image.dtype}, mean: {np.mean(image):.1f}")
+        
+        # Check if image needs inversion (white background should have high values)
+        # If mean is low, image likely has white lines on black background - invert it
+        if np.mean(image) < 127:
+            logger.info("Inverting image (detected white lines on black background)")
+            image = cv2.bitwise_not(image)
+        
+        # Apply threshold to ensure clean binary image
+        _, binary = cv2.threshold(image, 127, 255, cv2.THRESH_BINARY)
+        
+        # Invert for contour detection (findContours expects white objects on black background)
+        inverted = cv2.bitwise_not(binary)
+        
+        logger.info(f"Binary image mean: {np.mean(binary):.1f}, non-zero pixels: {np.count_nonzero(inverted)}")
+        
+        # Find contours - use RETR_LIST to get all contours
         contours, _ = cv2.findContours(
-            image, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE
+            inverted, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE
         )
+        
+        logger.info(f"Found {len(contours)} contours in image")
+        
+        # Filter out very small contours (noise)
+        min_contour_area = 10  # pixels
+        contours = [c for c in contours if cv2.contourArea(c) > min_contour_area]
+        
+        logger.info(f"Using {len(contours)} contours after filtering")
         
         # Create SVG content
         svg_content = [
@@ -317,6 +346,7 @@ class SimplePlotterApp:
         self.webcam = WebcamCapture()
         self.plotter = None
         self.svg_converter = None
+        self.ai_generator = None  # Initialize on first use
         
         # State variables
         self.current_image = None
@@ -324,6 +354,11 @@ class SimplePlotterApp:
         self.current_svg_path = None
         self.current_gcode_path = None
         self.temp_dir = tempfile.mkdtemp()
+        
+        # API keys (stored in memory)
+        self.anthropic_api_key = None
+        self.openai_api_key = None
+        self.gemini_api_key = None
         
         # Load configuration
         self.load_config()
@@ -418,56 +453,37 @@ class SimplePlotterApp:
         self.image_label.pack(expand=True)
     
     def setup_processing_tab(self):
-        """Setup image processing tab."""
+        """Setup image processing tab - simplified with AI provider selection."""
         # Processing controls
         controls_frame = ttk.LabelFrame(self.process_frame, text="Processing Controls", padding=10)
         controls_frame.pack(fill=tk.X, padx=5, pady=5)
         
-        # Method selection
-        ttk.Label(controls_frame, text="Method:").grid(row=0, column=0, sticky=tk.W, padx=5)
-        self.method_var = tk.StringVar(value='canny')
-        method_combo = ttk.Combobox(
-            controls_frame, textvariable=self.method_var,
-            values=list(self.image_processor.methods.values()),
-            state='readonly'
+        # AI Provider selection
+        ttk.Label(controls_frame, text="AI Provider:").grid(row=0, column=0, sticky=tk.W, padx=5, pady=5)
+        self.ai_provider_var = tk.StringVar(value="None (Canny)")
+        self.ai_provider_combo = ttk.Combobox(
+            controls_frame,
+            textvariable=self.ai_provider_var,
+            values=["None (Canny)", "Anthropic Claude", "OpenAI GPT-4V", "Google Gemini"],
+            state='readonly',
+            width=20
         )
-        method_combo.grid(row=0, column=1, padx=5, pady=2)
+        self.ai_provider_combo.grid(row=0, column=1, padx=5, pady=5, sticky=tk.W)
+        self.ai_provider_combo.bind('<<ComboboxSelected>>', self.on_provider_changed)
         
-        # Threshold controls
-        ttk.Label(controls_frame, text="Threshold 1:").grid(row=1, column=0, sticky=tk.W, padx=5)
-        self.threshold1_var = tk.IntVar(value=50)
-        ttk.Scale(
-            controls_frame, from_=1, to=255, orient=tk.HORIZONTAL,
-            variable=self.threshold1_var, length=200
-        ).grid(row=1, column=1, padx=5, pady=2)
-        
-        ttk.Label(controls_frame, text="Threshold 2:").grid(row=2, column=0, sticky=tk.W, padx=5)
-        self.threshold2_var = tk.IntVar(value=150)
-        ttk.Scale(
-            controls_frame, from_=1, to=255, orient=tk.HORIZONTAL,
-            variable=self.threshold2_var, length=200
-        ).grid(row=2, column=1, padx=5, pady=2)
-        
-        # Blur control
-        ttk.Label(controls_frame, text="Blur:").grid(row=3, column=0, sticky=tk.W, padx=5)
-        self.blur_var = tk.IntVar(value=1)
-        ttk.Scale(
-            controls_frame, from_=1, to=15, orient=tk.HORIZONTAL,
-            variable=self.blur_var, length=200
-        ).grid(row=3, column=1, padx=5, pady=2)
-        
-        # Invert option
-        self.invert_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(
-            controls_frame, text="Invert (white background)",
-            variable=self.invert_var
-        ).grid(row=4, column=0, columnspan=2, sticky=tk.W, padx=5, pady=5)
+        # API Keys button
+        ttk.Button(
+            controls_frame, text="⚙️ Configure API Keys",
+            command=self.configure_api_keys,
+            width=20
+        ).grid(row=1, column=0, columnspan=2, padx=5, pady=5)
         
         # Process button
         ttk.Button(
             controls_frame, text="Process Image",
-            command=self.process_current_image
-        ).grid(row=5, column=0, columnspan=2, pady=10)
+            command=self.process_current_image,
+            width=20
+        ).grid(row=2, column=0, columnspan=2, pady=10)
         
         # G-code conversion section
         gcode_frame = ttk.LabelFrame(self.process_frame, text="G-code Generation", padding=10)
@@ -672,41 +688,343 @@ class SimplePlotterApp:
         except Exception as e:
             logger.error(f"Failed to display image: {e}")
     
+    def on_provider_changed(self, event=None):
+        """Handle AI provider selection change."""
+        provider_name = self.ai_provider_var.get()
+        if provider_name == "None (Canny)":
+            self.status_var.set("Using Canny edge detection (no AI)")
+        else:
+            self.status_var.set(f"Selected: {provider_name}")
+    
+    def configure_api_keys(self):
+        """Show dialog to configure all API keys."""
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Configure AI API Keys")
+        dialog.geometry("600x500")
+        dialog.transient(self.root)
+        dialog.grab_set()
+        
+        # Info label
+        info_frame = ttk.Frame(dialog, padding=10)
+        info_frame.pack(fill=tk.X)
+        
+        ttk.Label(
+            info_frame,
+            text="Configure API keys for AI caricature generation. At least one key is required to use AI mode.",
+            wraplength=560
+        ).pack(anchor=tk.W, pady=(0, 10))
+        
+        # Anthropic section
+        anthro_frame = ttk.LabelFrame(dialog, text="Anthropic Claude", padding=10)
+        anthro_frame.pack(fill=tk.X, padx=10, pady=5)
+        
+        ttk.Label(anthro_frame, text="API Key:").pack(anchor=tk.W)
+        anthropic_var = tk.StringVar(value=self.anthropic_api_key or os.environ.get('ANTHROPIC_API_KEY') or "")
+        anthropic_entry = ttk.Entry(anthro_frame, textvariable=anthropic_var, show="*", width=60)
+        anthropic_entry.pack(fill=tk.X, pady=2)
+        
+        ttk.Label(anthro_frame, text="Get key: https://console.anthropic.com/", foreground="blue").pack(anchor=tk.W)
+        
+        show_anthro_var = tk.BooleanVar()
+        ttk.Checkbutton(anthro_frame, text="Show", variable=show_anthro_var,
+                       command=lambda: anthropic_entry.config(show="" if show_anthro_var.get() else "*")).pack(anchor=tk.W)
+        
+        # OpenAI section
+        openai_frame = ttk.LabelFrame(dialog, text="OpenAI GPT-4 Vision", padding=10)
+        openai_frame.pack(fill=tk.X, padx=10, pady=5)
+        
+        ttk.Label(openai_frame, text="API Key:").pack(anchor=tk.W)
+        openai_var = tk.StringVar(value=self.openai_api_key or os.environ.get('OPENAI_API_KEY') or "")
+        openai_entry = ttk.Entry(openai_frame, textvariable=openai_var, show="*", width=60)
+        openai_entry.pack(fill=tk.X, pady=2)
+        
+        ttk.Label(openai_frame, text="Get key: https://platform.openai.com/api-keys", foreground="blue").pack(anchor=tk.W)
+        
+        show_openai_var = tk.BooleanVar()
+        ttk.Checkbutton(openai_frame, text="Show", variable=show_openai_var,
+                       command=lambda: openai_entry.config(show="" if show_openai_var.get() else "*")).pack(anchor=tk.W)
+        
+        # Gemini section
+        gemini_frame = ttk.LabelFrame(dialog, text="Google Gemini", padding=10)
+        gemini_frame.pack(fill=tk.X, padx=10, pady=5)
+        
+        ttk.Label(gemini_frame, text="API Key:").pack(anchor=tk.W)
+        gemini_var = tk.StringVar(value=self.gemini_api_key or os.environ.get('GOOGLE_API_KEY') or "")
+        gemini_entry = ttk.Entry(gemini_frame, textvariable=gemini_var, show="*", width=60)
+        gemini_entry.pack(fill=tk.X, pady=2)
+        
+        ttk.Label(gemini_frame, text="Get key: https://makersuite.google.com/app/apikey", foreground="blue").pack(anchor=tk.W)
+        
+        show_gemini_var = tk.BooleanVar()
+        ttk.Checkbutton(gemini_frame, text="Show", variable=show_gemini_var,
+                       command=lambda: gemini_entry.config(show="" if show_gemini_var.get() else "*")).pack(anchor=tk.W)
+        
+        # Buttons
+        button_frame = ttk.Frame(dialog, padding=10)
+        button_frame.pack(fill=tk.X)
+        
+        def save_keys():
+            self.anthropic_api_key = anthropic_var.get().strip() or None
+            self.openai_api_key = openai_var.get().strip() or None
+            self.gemini_api_key = gemini_var.get().strip() or None
+            
+            # Reset generator to use new keys
+            self.ai_generator = None
+            
+            count = sum([bool(self.anthropic_api_key), bool(self.openai_api_key), bool(self.gemini_api_key)])
+            if count > 0:
+                messagebox.showinfo("Success", f"Saved {count} API key(s)! You can now use AI caricature mode.", parent=dialog)
+            else:
+                messagebox.showinfo("Info", "No API keys configured. Will use Canny edge detection.", parent=dialog)
+            
+            dialog.destroy()
+        
+        ttk.Button(button_frame, text="Save", command=save_keys).pack(side=tk.LEFT, padx=5)
+        ttk.Button(button_frame, text="Cancel", command=dialog.destroy).pack(side=tk.LEFT, padx=5)
+        
+        dialog.wait_window()
+    
+    def init_ai_generator(self, provider: AIProvider) -> bool:
+        """Initialize AI generator with specified provider."""
+        try:
+            self.ai_generator = AICaricatureGenerator(
+                provider=provider,
+                anthropic_key=self.anthropic_api_key,
+                openai_key=self.openai_api_key,
+                gemini_key=self.gemini_api_key
+            )
+            return True
+        except Exception as e:
+            logger.warning(f"Failed to initialize AI generator: {e}")
+            return False
+    
     def process_current_image(self):
-        """Process current image to sketch."""
+        """Process current image with selected AI provider or Canny fallback."""
         if self.current_image is None:
             messagebox.showwarning("Warning", "No image to process")
             return
         
         try:
-            # Get method key from display name
-            method_name = self.method_var.get()
-            method_key = None
-            for key, name in self.image_processor.methods.items():
-                if name == method_name:
-                    method_key = key
-                    break
+            provider_name = self.ai_provider_var.get()
             
-            if method_key is None:
-                method_key = 'canny'
+            # Map UI selection to provider
+            provider_map = {
+                "None (Canny)": AIProvider.NONE,
+                "Anthropic Claude": AIProvider.ANTHROPIC,
+                "OpenAI GPT-4V": AIProvider.OPENAI,
+                "Google Gemini": AIProvider.GEMINI
+            }
             
-            # Process image
-            processed = self.image_processor.process_image(
-                self.current_image,
-                method=method_key,
-                threshold1=self.threshold1_var.get(),
-                threshold2=self.threshold2_var.get(),
-                blur=self.blur_var.get(),
-                invert=self.invert_var.get()
-            )
+            provider = provider_map.get(provider_name, AIProvider.NONE)
             
-            self.processed_image = processed
-            self.display_image(processed, self.result_label)
-            self.status_var.set("Image processed successfully")
+            # Use AI if provider selected
+            if provider != AIProvider.NONE:
+                self.status_var.set(f"Processing with {provider_name}...")
+                self.root.update()
+                
+                # Initialize or reinitialize generator
+                if self.ai_generator is None or self.ai_generator.provider != provider:
+                    if not self.init_ai_generator(provider):
+                        messagebox.showerror(
+                            "API Key Required",
+                            f"No API key configured for {provider_name}.\n\nPlease click 'Configure API Keys' to set up."
+                        )
+                        return
+                
+                # Generate caricature
+                processed, description, used_provider = self.ai_generator.generate_caricature(self.current_image)
+                
+                self.processed_image = processed
+                self.display_image(processed, self.result_label)
+                
+                if used_provider == AIProvider.NONE:
+                    self.status_var.set("AI unavailable - used Canny edge detection")
+                else:
+                    self.status_var.set(f"Processed with {used_provider.value}")
+                    logger.info(f"AI: {description[:100]}...")
             
+            else:
+                # Use Canny edge detection
+                self.status_var.set("Processing with Canny edge detection...")
+                self.root.update()
+                
+                # Initialize generator for Canny fallback
+                if self.ai_generator is None:
+                    self.ai_generator = AICaricatureGenerator(provider=AIProvider.NONE)
+                
+                processed = self.ai_generator.enhance_edges(self.current_image)
+                
+                self.processed_image = processed
+                self.display_image(processed, self.result_label)
+                self.status_var.set("Processed with Canny edge detection")
+        
         except Exception as e:
             messagebox.showerror("Error", f"Processing failed: {e}")
-            logger.error(f"Image processing error: {e}")
+            logger.error(f"Processing error: {e}", exc_info=True)
+    
+    def toggle_ai_mode(self):
+        """Toggle between AI and manual processing modes."""
+        use_ai = self.use_ai_var.get()
+        
+        # Disable manual controls when AI mode is active
+        state = 'disabled' if use_ai else 'normal'
+        self.method_combo.config(state='disabled' if use_ai else 'readonly')
+        self.threshold1_scale.config(state=state)
+        self.threshold2_scale.config(state=state)
+        self.blur_scale.config(state=state)
+        self.invert_check.config(state=state)
+        
+        if use_ai:
+            self.status_var.set("AI Caricature mode enabled - processing uses Claude Haiku")
+        else:
+            self.status_var.set("Manual edge detection mode")
+    
+    def configure_api_key(self):
+        """Show dialog to configure Anthropic API key."""
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Configure Anthropic API Key")
+        dialog.geometry("500x300")
+        dialog.transient(self.root)
+        dialog.grab_set()
+        
+        # Info label
+        info_frame = ttk.Frame(dialog, padding=10)
+        info_frame.pack(fill=tk.X)
+        
+        ttk.Label(
+            info_frame,
+            text="Enter your Anthropic API key to enable AI caricature generation.",
+            wraplength=460
+        ).pack(anchor=tk.W, pady=(0, 5))
+        
+        ttk.Label(
+            info_frame,
+            text="Get your API key at: https://console.anthropic.com/",
+            foreground="blue",
+            cursor="hand2",
+            wraplength=460
+        ).pack(anchor=tk.W, pady=(0, 10))
+        
+        # Current status
+        status_frame = ttk.LabelFrame(info_frame, text="Current Status", padding=5)
+        status_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        # Check for existing API key
+        env_key = os.environ.get('ANTHROPIC_API_KEY')
+        current_key = self.anthropic_api_key or env_key
+        
+        if current_key:
+            status_text = f"✓ API Key set (starts with: {current_key[:15]}...)"
+            status_color = "green"
+        else:
+            status_text = "✗ No API key configured"
+            status_color = "red"
+        
+        status_label = ttk.Label(status_frame, text=status_text, foreground=status_color)
+        status_label.pack(anchor=tk.W)
+        
+        # Input frame
+        input_frame = ttk.LabelFrame(dialog, text="API Key", padding=10)
+        input_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+        
+        ttk.Label(input_frame, text="Paste your API key:").pack(anchor=tk.W, pady=(0, 5))
+        
+        api_key_var = tk.StringVar(value=current_key or "")
+        api_key_entry = ttk.Entry(input_frame, textvariable=api_key_var, show="*", width=60)
+        api_key_entry.pack(fill=tk.X, pady=(0, 5))
+        
+        # Show/hide toggle
+        show_var = tk.BooleanVar(value=False)
+        def toggle_visibility():
+            api_key_entry.config(show="" if show_var.get() else "*")
+        
+        ttk.Checkbutton(
+            input_frame,
+            text="Show API key",
+            variable=show_var,
+            command=toggle_visibility
+        ).pack(anchor=tk.W, pady=(0, 10))
+        
+        # Help text
+        help_text = (
+            "Your API key will be stored in memory for this session only.\n"
+            "For permanent storage, set the ANTHROPIC_API_KEY environment variable."
+        )
+        ttk.Label(
+            input_frame,
+            text=help_text,
+            foreground="gray",
+            wraplength=460,
+            font=("TkDefaultFont", 9)
+        ).pack(anchor=tk.W)
+        
+        # Buttons
+        button_frame = ttk.Frame(dialog, padding=10)
+        button_frame.pack(fill=tk.X)
+        
+        def save_key():
+            key = api_key_var.get().strip()
+            if not key:
+                messagebox.showwarning("Warning", "Please enter an API key", parent=dialog)
+                return
+            
+            # Validate key format
+            if not key.startswith('sk-ant-'):
+                result = messagebox.askyesno(
+                    "Unusual Format",
+                    "API key doesn't start with 'sk-ant-'. Save anyway?",
+                    parent=dialog
+                )
+                if not result:
+                    return
+            
+            # Save to instance variable
+            self.anthropic_api_key = key
+            
+            # Reset generator so it uses new key
+            self.caricature_generator = None
+            
+            messagebox.showinfo(
+                "Success",
+                "API key saved! You can now use AI Caricature mode.",
+                parent=dialog
+            )
+            dialog.destroy()
+        
+        def test_key():
+            key = api_key_var.get().strip()
+            if not key:
+                messagebox.showwarning("Warning", "Please enter an API key to test", parent=dialog)
+                return
+            
+            # Temporarily set key and try to initialize
+            old_key = self.anthropic_api_key
+            self.anthropic_api_key = key
+            self.caricature_generator = None
+            
+            try:
+                from src.utils.caricature_generator import CaricatureGenerator
+                test_gen = CaricatureGenerator(api_key=key)
+                messagebox.showinfo(
+                    "Success",
+                    "✓ API key is valid!\n\nCaricatureGenerator initialized successfully.",
+                    parent=dialog
+                )
+            except Exception as e:
+                messagebox.showerror(
+                    "Test Failed",
+                    f"API key validation failed:\n\n{e}",
+                    parent=dialog
+                )
+                self.anthropic_api_key = old_key
+        
+        ttk.Button(button_frame, text="Test Key", command=test_key).pack(side=tk.LEFT, padx=5)
+        ttk.Button(button_frame, text="Save", command=save_key).pack(side=tk.LEFT, padx=5)
+        ttk.Button(button_frame, text="Cancel", command=dialog.destroy).pack(side=tk.LEFT, padx=5)
+        
+        # Focus on entry
+        api_key_entry.focus()
+        dialog.wait_window()
     
     def generate_gcode(self):
         """Generate G-code from processed image."""

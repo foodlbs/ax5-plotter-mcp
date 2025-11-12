@@ -29,6 +29,11 @@ vpype>=1.13.0              # SVG optimization and processing
 vpype-gcode>=0.2.0         # Convert optimized SVG to G-code
 svgpathtools>=1.5.1        # SVG path manipulation
 
+# AI image processing
+anthropic>=0.39.0          # Anthropic Claude API for caricature generation
+openai>=1.0.0              # OpenAI GPT-4 Vision API (optional)
+google-generativeai>=0.3.0 # Google Gemini API (optional)
+
 # ============================================================================
 # OPTIONAL DEPENDENCIES (commented out by default)
 # ============================================================================

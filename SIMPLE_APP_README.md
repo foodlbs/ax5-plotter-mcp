@@ -14,6 +14,11 @@ This is a simplified local application for the AX5 plotter that allows you to:
 - **Image Preview**: See your selected/captured image before processing
 
 ### Image Processing
+- **AI-Powered Caricature Mode** (NEW! 🤖):
+  - Uses Anthropic's Claude Haiku for intelligent caricature generation
+  - Automatically identifies and emphasizes key features
+  - Multi-scale edge detection for rich, artistic results
+  - See [AI_CARICATURE_GUIDE.md](AI_CARICATURE_GUIDE.md) for setup
 - **Edge Detection Methods**:
   - Canny Edge Detection (recommended)
   - Laplacian Edge Detection
@@ -39,6 +44,21 @@ This is a simplified local application for the AX5 plotter that allows you to:
 # Install Python dependencies for the simple app
 pip install -r requirements-simple.txt
 ```
+
+**Optional: AI Caricature Feature**
+
+To use AI-powered caricature generation, get an API key from https://console.anthropic.com/
+
+You can configure it in two ways:
+1. **Through the GUI** (easiest): Click "⚙️ API Key" button in the Processing tab
+2. **Environment variable**: `export ANTHROPIC_API_KEY='your-api-key-here'`
+
+Test the AI feature:
+```bash
+python3 test_ai_feature.py
+```
+
+See [AI_CARICATURE_GUIDE.md](AI_CARICATURE_GUIDE.md) for detailed setup instructions.
 
 ### 2. Configure Your Plotter
 
