@@ -134,9 +134,9 @@ class ImageProcessor:
         Returns:
             str: Path to created SVG file
         """
-        # Find contours in the image
+        # Find contours in the image - use RETR_LIST to get all contours, not just external
         contours, _ = cv2.findContours(
-            image, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+            image, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE
         )
         
         # Create SVG content
@@ -201,8 +201,72 @@ class WebcamCapture:
     def start_capture(self, camera_index: int = 0) -> bool:
         """Start webcam capture."""
         try:
-            self.cap = cv2.VideoCapture(camera_index)
-            if not self.cap.isOpened():
+            # List of camera indices and backends to try
+            attempts = [
+                (camera_index, None),  # Default backend
+                (0, None),
+                (1, None),
+                (0, cv2.CAP_AVFOUNDATION),  # macOS AVFoundation backend
+                (1, cv2.CAP_AVFOUNDATION),
+                (0, cv2.CAP_ANY),  # Auto-detect backend
+            ]
+            
+            success = False
+            for idx, backend in attempts:
+                try:
+                    if backend is not None:
+                        logger.info(f"Trying camera index {idx} with backend {backend}")
+                        self.cap = cv2.VideoCapture(idx, backend)
+                    else:
+                        logger.info(f"Trying camera index {idx} with default backend")
+                        self.cap = cv2.VideoCapture(idx)
+                    
+                    # Give it a moment to initialize
+                    import time
+                    time.sleep(0.5)
+                    
+                    if self.cap.isOpened():
+                        # Try to read a test frame
+                        ret, frame = self.cap.read()
+                        if ret and frame is not None:
+                            logger.info(f"✓ Successfully opened camera at index {idx}" + 
+                                      (f" with backend {backend}" if backend else ""))
+                            success = True
+                            break
+                        else:
+                            logger.warning(f"Camera {idx} opened but couldn't read frame")
+                            self.cap.release()
+                    else:
+                        self.cap.release()
+                        
+                except Exception as e:
+                    logger.debug(f"Failed attempt with index {idx}: {e}")
+                    if self.cap:
+                        self.cap.release()
+                    continue
+            
+            if not success:
+                logger.error("=" * 60)
+                logger.error("CAMERA INITIALIZATION FAILED")
+                logger.error("=" * 60)
+                logger.error("")
+                logger.error("Common issues on macOS:")
+                logger.error("")
+                logger.error("1. CAMERA PERMISSIONS NOT GRANTED:")
+                logger.error("   → Go to: System Settings > Privacy & Security > Camera")
+                logger.error("   → Enable camera access for 'Terminal' or 'Python'")
+                logger.error("   → You may need to restart the application")
+                logger.error("")
+                logger.error("2. NO CAMERA CONNECTED:")
+                logger.error("   → Check if a camera is physically connected")
+                logger.error("   → For built-in cameras, check if camera is working in other apps")
+                logger.error("   → For USB cameras, try unplugging and reconnecting")
+                logger.error("")
+                logger.error("3. CAMERA IN USE BY ANOTHER APP:")
+                logger.error("   → Close Zoom, FaceTime, Photo Booth, etc.")
+                logger.error("   → Check Activity Monitor for apps using the camera")
+                logger.error("")
+                logger.error("=" * 60)
                 return False
             
             # Set resolution for better quality
@@ -211,8 +275,10 @@ class WebcamCapture:
             
             self.is_capturing = True
             return True
+            
         except Exception as e:
             logger.error(f"Failed to start webcam: {e}")
+            return False
             return False
     
     def get_frame(self) -> Optional[np.ndarray]:
@@ -252,9 +318,11 @@ class SimplePlotterApp:
         self.plotter = None
         self.svg_converter = None
         
-        # Current image and processing state
+        # State variables
         self.current_image = None
         self.processed_image = None
+        self.current_svg_path = None
+        self.current_gcode_path = None
         self.temp_dir = tempfile.mkdtemp()
         
         # Load configuration
@@ -401,6 +469,28 @@ class SimplePlotterApp:
             command=self.process_current_image
         ).grid(row=5, column=0, columnspan=2, pady=10)
         
+        # G-code conversion section
+        gcode_frame = ttk.LabelFrame(self.process_frame, text="G-code Generation", padding=10)
+        gcode_frame.pack(fill=tk.X, padx=5, pady=5)
+        
+        ttk.Button(
+            gcode_frame, text="Generate G-code",
+            command=self.generate_gcode
+        ).pack(side=tk.LEFT, padx=5)
+        
+        ttk.Button(
+            gcode_frame, text="View G-code",
+            command=self.view_gcode
+        ).pack(side=tk.LEFT, padx=5)
+        
+        ttk.Button(
+            gcode_frame, text="Save G-code As...",
+            command=self.save_gcode
+        ).pack(side=tk.LEFT, padx=5)
+        
+        self.gcode_status = ttk.Label(gcode_frame, text="No G-code generated")
+        self.gcode_status.pack(side=tk.LEFT, padx=10)
+        
         # Result preview
         result_frame = ttk.LabelFrame(self.process_frame, text="Processed Result", padding=10)
         result_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
@@ -434,12 +524,12 @@ class SimplePlotterApp:
         
         ttk.Button(
             control_frame, text="Test Pen Up",
-            command=lambda: self.pen_control(False)
+            command=lambda: self.pen_control(True)
         ).pack(side=tk.LEFT, padx=5)
         
         ttk.Button(
             control_frame, text="Test Pen Down",
-            command=lambda: self.pen_control(True)
+            command=lambda: self.pen_control(False)
         ).pack(side=tk.LEFT, padx=5)
         
         # Plotting section
@@ -510,7 +600,22 @@ class SimplePlotterApp:
                 self.webcam_button.config(text="Stop Webcam")
                 self.status_var.set("Webcam active")
             else:
-                messagebox.showerror("Error", "Could not start webcam")
+                error_msg = (
+                    "❌ Could not start webcam\n\n"
+                    "Most likely cause on macOS:\n"
+                    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                    "📷 Camera permissions not granted\n\n"
+                    "How to fix:\n"
+                    "1. Open System Settings\n"
+                    "2. Go to Privacy & Security → Camera\n"
+                    "3. Enable camera for 'Terminal' or 'Python'\n"
+                    "4. Restart this application\n\n"
+                    "Other possible issues:\n"
+                    "• No camera connected or not working\n"
+                    "• Camera in use by another app (Zoom, FaceTime, etc.)\n\n"
+                    "Check the terminal/console for detailed error messages."
+                )
+                messagebox.showerror("Webcam Error", error_msg)
         else:
             self.webcam.stop_capture()
             self.webcam_active = False
@@ -532,7 +637,7 @@ class SimplePlotterApp:
     
     def update_webcam(self):
         """Update webcam preview."""
-        if self.webcam_active and not self.current_image is None:
+        if self.webcam_active:
             frame = self.webcam.get_frame()
             if frame is not None:
                 self.display_image(frame, self.image_label, max_size=(300, 200))
@@ -602,6 +707,136 @@ class SimplePlotterApp:
         except Exception as e:
             messagebox.showerror("Error", f"Processing failed: {e}")
             logger.error(f"Image processing error: {e}")
+    
+    def generate_gcode(self):
+        """Generate G-code from processed image."""
+        if self.processed_image is None:
+            messagebox.showwarning("Warning", "No processed image. Please process an image first.")
+            return
+        
+        try:
+            # Create temporary SVG file
+            svg_filename = os.path.join(self.temp_dir, "sketch.svg")
+            
+            # Convert processed image to SVG
+            logger.info(f"Creating SVG: {svg_filename}")
+            self.image_processor.image_to_svg(self.processed_image, svg_filename, 150, 100)
+            self.current_svg_path = svg_filename
+            
+            # Initialize converter if not already done
+            if self.svg_converter is None:
+                config_path = "config/settings.yaml"
+                if not os.path.exists(config_path):
+                    config_path = "config/settings.example.yaml"
+                self.svg_converter = SVGConverter(config_path)
+            
+            # Convert SVG to G-code
+            gcode_filename = os.path.join(self.temp_dir, "sketch.gcode")
+            logger.info(f"Converting to G-code: {gcode_filename}")
+            
+            # Always use optimization for best results
+            logger.info("Using vpype optimization for path planning")
+            
+            self.svg_converter.convert(
+                svg_filename,
+                gcode_filename,
+                pen_profile="ballpoint",
+                optimize=True
+            )
+            
+            self.current_gcode_path = gcode_filename
+            
+            # Update status
+            file_size = os.path.getsize(gcode_filename)
+            with open(gcode_filename, 'r') as f:
+                line_count = sum(1 for line in f)
+            
+            status_text = f"G-code generated: {line_count} lines, {file_size} bytes"
+            self.gcode_status.config(text=status_text)
+            self.status_var.set("G-code generated successfully")
+            
+            messagebox.showinfo("Success", f"G-code generated successfully!\n{line_count} lines")
+            
+        except Exception as e:
+            messagebox.showerror("Error", f"G-code generation failed: {e}")
+            logger.error(f"G-code generation error: {e}")
+    
+    def view_gcode(self):
+        """View generated G-code in a new window."""
+        if self.current_gcode_path is None or not os.path.exists(self.current_gcode_path):
+            messagebox.showwarning("Warning", "No G-code to view. Generate G-code first.")
+            return
+        
+        try:
+            # Read G-code file
+            with open(self.current_gcode_path, 'r') as f:
+                gcode_content = f.read()
+            
+            # Create viewer window
+            viewer = tk.Toplevel(self.root)
+            viewer.title("G-code Viewer")
+            viewer.geometry("600x500")
+            
+            # Add title and info
+            info_frame = ttk.Frame(viewer, padding=10)
+            info_frame.pack(fill=tk.X)
+            
+            line_count = gcode_content.count('\n')
+            ttk.Label(info_frame, text=f"File: {os.path.basename(self.current_gcode_path)}").pack(anchor=tk.W)
+            ttk.Label(info_frame, text=f"Lines: {line_count}").pack(anchor=tk.W)
+            
+            # Add text widget with scrollbar
+            text_frame = ttk.Frame(viewer)
+            text_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+            
+            scrollbar = ttk.Scrollbar(text_frame)
+            scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+            
+            text_widget = tk.Text(text_frame, wrap=tk.NONE, yscrollcommand=scrollbar.set, font=("Courier", 10))
+            text_widget.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+            scrollbar.config(command=text_widget.yview)
+            
+            # Insert G-code content
+            text_widget.insert('1.0', gcode_content)
+            text_widget.config(state=tk.DISABLED)  # Make read-only
+            
+            # Add close button
+            ttk.Button(viewer, text="Close", command=viewer.destroy).pack(pady=10)
+            
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to view G-code: {e}")
+            logger.error(f"G-code viewer error: {e}")
+    
+    def save_gcode(self):
+        """Save G-code to user-selected file."""
+        if self.current_gcode_path is None or not os.path.exists(self.current_gcode_path):
+            messagebox.showwarning("Warning", "No G-code to save. Generate G-code first.")
+            return
+        
+        try:
+            # Ask user for save location
+            filename = filedialog.asksaveasfilename(
+                title="Save G-code File",
+                defaultextension=".gcode",
+                filetypes=(
+                    ('G-code files', '*.gcode'),
+                    ('All files', '*.*')
+                ),
+                initialfile="sketch.gcode"
+            )
+            
+            if filename:
+                # Copy temp G-code to selected location
+                import shutil
+                shutil.copy2(self.current_gcode_path, filename)
+                
+                messagebox.showinfo("Success", f"G-code saved to:\n{filename}")
+                self.status_var.set(f"G-code saved: {os.path.basename(filename)}")
+                logger.info(f"G-code saved to: {filename}")
+                
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to save G-code: {e}")
+            logger.error(f"G-code save error: {e}")
     
     def connect_plotter(self):
         """Connect to plotter."""

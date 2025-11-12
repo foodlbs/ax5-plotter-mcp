@@ -33,7 +33,7 @@ class SVGConverter:
         svg_file: str,
         output_file: Optional[str] = None,
         pen_profile: str = "ballpoint",
-        optimize: bool = True
+        optimize: bool = False  # Changed to False by default - vpype not always available
     ) -> str:
         """
         Convert SVG to G-code.
@@ -42,7 +42,7 @@ class SVGConverter:
             svg_file: Path to input SVG file
             output_file: Optional output G-code path (auto-generated if None)
             pen_profile: Pen type profile name
-            optimize: Whether to apply path optimization
+            optimize: Whether to apply path optimization (requires vpype)
             
         Returns:
             str: Path to generated G-code file
@@ -59,8 +59,13 @@ class SVGConverter:
         
         logger.info(f"Converting {svg_file} to {output_file}")
         
+        # Try vpype first if optimize is requested, but fall back to basic if it fails
         if optimize:
-            return self._convert_with_vpype(svg_file, output_file, pen_profile)
+            try:
+                return self._convert_with_vpype(svg_file, output_file, pen_profile)
+            except Exception as e:
+                logger.warning(f"vpype optimization failed ({e}), using basic conversion")
+                return self._convert_basic(svg_file, output_file, pen_profile)
         else:
             return self._convert_basic(svg_file, output_file, pen_profile)
     
@@ -108,11 +113,15 @@ class SVGConverter:
             if self.opt_config['simplify_tolerance']:
                 cmd.extend(["linesimplify", f"--tolerance={simplify_tol}mm"])
             
-            # Layout and scaling
+            # Layout and scale - use A5 landscape with centered alignment and margins
             cmd.extend([
                 "layout",
+                "--landscape",
                 f"--fit-to-margins={margin}mm",
-                f"{width}x{height}mm"
+                "a5",
+                # Translate to center the drawing properly on the page
+                # A5 landscape is 210mm x 148mm, we want 210mm x 150mm effectively
+                "translate", f"{margin}mm", f"{margin}mm"
             ])
             
             # G-code output
@@ -136,18 +145,21 @@ class SVGConverter:
                 raise Exception(f"vpype failed: {result.stderr}")
             
             logger.info("vpype conversion successful")
-            
-            # Post-process G-code for pen profile
-            self._apply_pen_profile(output_file, pen_profile)
-            
+
+            # Center the G-code output on the page
+            self._center_gcode(output_file, width, height)
+
             return output_file
             
         except FileNotFoundError:
             logger.warning("vpype not found, falling back to basic conversion")
             return self._convert_basic(svg_file, output_file, pen_profile)
+        except subprocess.CalledProcessError as e:
+            logger.warning(f"vpype failed: {e}, falling back to basic conversion")
+            return self._convert_basic(svg_file, output_file, pen_profile)
         except Exception as e:
-            logger.error(f"vpype conversion failed: {e}")
-            raise
+            logger.error(f"vpype conversion failed: {e}, falling back to basic conversion")
+            return self._convert_basic(svg_file, output_file, pen_profile)
     
     def _convert_basic(
         self,
@@ -215,6 +227,8 @@ M2
             compiler.compile_to_file(output_file)
             
             logger.info("Basic SVG conversion successful")
+            # Normalize resulting G-code to ensure compatibility with AX5
+            self._normalize_gcode(output_file, pen_profile)
             return output_file
             
         except ImportError:
@@ -260,6 +274,162 @@ M2
         
         logger.debug(f"Applied pen profile: {pen_profile}")
     
+    def _center_gcode(self, gcode_file: str, page_width: float, page_height: float) -> None:
+        """
+        Center the G-code drawing on the page by calculating bounds and adding offset.
+        
+        Args:
+            gcode_file: G-code file to center
+            page_width: Target page width in mm
+            page_height: Target page height in mm
+        """
+        import re
+        
+        # Read G-code and find bounds
+        with open(gcode_file, 'r') as f:
+            lines = f.readlines()
+        
+        min_x = min_y = float('inf')
+        max_x = max_y = float('-inf')
+        
+        for line in lines:
+            x_match = re.search(r'X([\d.]+)', line)
+            y_match = re.search(r'Y([\d.]+)', line)
+            if x_match:
+                x = float(x_match.group(1))
+                min_x = min(min_x, x)
+                max_x = max(max_x, x)
+            if y_match:
+                y = float(y_match.group(1))
+                min_y = min(min_y, y)
+                max_y = max(max_y, y)
+        
+        # Calculate centering offset
+        drawing_width = max_x - min_x
+        drawing_height = max_y - min_y
+        offset_x = (page_width - drawing_width) / 2 - min_x
+        offset_y = (page_height - drawing_height) / 2 - min_y
+        
+        logger.info(f"Centering: drawing={drawing_width:.1f}x{drawing_height:.1f}mm, offset=({offset_x:.1f}, {offset_y:.1f})mm")
+        
+        # Apply offset to all coordinates
+        centered_lines = []
+        for line in lines:
+            new_line = line
+            x_match = re.search(r'X([\d.]+)', line)
+            y_match = re.search(r'Y([\d.]+)', line)
+            
+            if x_match:
+                old_x = float(x_match.group(1))
+                new_x = old_x + offset_x
+                new_line = new_line.replace(f'X{x_match.group(1)}', f'X{new_x:.4f}')
+            
+            if y_match:
+                old_y = float(y_match.group(1))
+                new_y = old_y + offset_y
+                new_line = new_line.replace(f'Y{y_match.group(1)}', f'Y{new_y:.4f}')
+            
+            centered_lines.append(new_line)
+        
+        # Write back centered G-code
+        with open(gcode_file, 'w') as f:
+            f.writelines(centered_lines)
+        
+        logger.info(f"G-code centered on {page_width}x{page_height}mm page")
+    
+    def _normalize_gcode(self, gcode_file: str, pen_profile: str) -> None:
+        """
+        Ensure G-code conforms to a minimal AX5-safe structure:
+        - Add a standard header if missing
+```
+        - Ensure pen up/down dwells use the profile dwell time
+        - Ensure movement commands include sensible feed rates
+        - Append a footer that raises the pen and homes X/Y
+
+        This is intentionally conservative to make the basic converter
+        output safe for the AX5 when vpype is not available.
+        """
+        profile = self.servo_config['profiles'].get(
+            pen_profile,
+            self.servo_config['profiles']['ballpoint']
+        )
+
+        pen_up = self.servo_config.get('pen_up_command', 'M5')
+        pen_down = self.servo_config.get('pen_down_command', 'M3')
+        dwell = profile.get('dwell', self.servo_config.get('dwell_time', 0.5))
+        travel_f = self.speed_config.get('travel', 1500)
+        draw_f = profile.get('speed', self.speed_config.get('draw', 800))
+
+        with open(gcode_file, 'r') as f:
+            raw_lines = [ln.rstrip('\n') for ln in f.readlines()]
+
+        # Filter out empty lines for processing
+        lines = [ln for ln in raw_lines if ln.strip()]
+
+        new_lines = []
+        
+        # Ensure proper header is always present
+        has_header = any('G21' in ln and 'G90' in ln for ln in lines[:5])
+        if not has_header:
+            new_lines.extend([
+                'G21 G90 G17',
+                f"{pen_up}",
+                f"G4 P{dwell}",
+            ])
+
+        pen_is_down = False
+        for ln in lines:
+            upper = ln.strip().upper()
+            
+            # Skip if this looks like our header (we already added it)
+            if not has_header and ('G21' in upper or 'G90' in upper):
+                continue
+
+            # Normalize dwell lines
+            if upper.startswith('G4'):
+                new_lines.append(f"G4 P{dwell}")
+                continue
+
+            # Track pen state and ensure dwell after state changes
+            if pen_down in ln:
+                pen_is_down = True
+                new_lines.append(pen_down)
+                new_lines.append(f"G4 P{dwell}")
+                continue
+            if pen_up in ln:
+                pen_is_down = False
+                new_lines.append(pen_up)
+                new_lines.append(f"G4 P{dwell}")
+                continue
+
+            # Movement commands: ensure feedrates
+            if upper.startswith('G0') or upper.startswith('G1'):
+                if 'F' not in upper:
+                    fval = draw_f if pen_is_down else travel_f
+                    new_lines.append(f"{ln} F{int(fval)}")
+                else:
+                    new_lines.append(ln)
+                continue
+
+            # Keep other commands as-is (but skip M2 since we add footer)
+            if upper != 'M2' and upper != 'M30':
+                new_lines.append(ln)
+
+        # Always ensure a proper footer
+        has_m2 = any('M2' in ln.upper() or 'M30' in ln.upper() for ln in new_lines[-3:])
+        if not has_m2:
+            # Make sure pen is up and we return home
+            new_lines.append(pen_up)
+            new_lines.append(f"G4 P{dwell}")
+            new_lines.append(f"G0 X0 Y0 F{int(travel_f)}")
+            new_lines.append('M2')
+
+        # Write back
+        with open(gcode_file, 'w') as f:
+            f.write('\n'.join(new_lines) + '\n')
+
+        logger.info(f"Normalized G-code: {gcode_file}")
+
     def estimate_time(self, gcode_file: str) -> float:
         """
         Estimate plotting time in seconds.
@@ -318,15 +488,15 @@ def create_vpype_profile(config_path: str = "config/settings.yaml") -> None:
     
     servo_config = config['servo']
     
-    profile = f"""
-[gwrite.ax5_custom]
+    # Build profile with single braces for vpype template substitution
+    profile = f"""[gwrite.ax5_custom]
 unit = "mm"
 vertical_flip = true
 
 document_start = \"\"\"
 G21 G90 G17
-M3 S1000
-G4 P0.5
+{servo_config['pen_up_command']}
+G4 P{servo_config['dwell_time']}
 \"\"\"
 
 segment_first = \"\"\"
@@ -353,7 +523,7 @@ M2
     # Write to ~/.vpype.toml
     vpype_config_path = os.path.expanduser("~/.vpype.toml")
     
-    with open(vpype_config_path, 'a') as f:
+    with open(vpype_config_path, 'w') as f:
         f.write(profile)
     
     logger.info(f"vpype profile created at {vpype_config_path}")

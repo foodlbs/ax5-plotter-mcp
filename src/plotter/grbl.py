@@ -2,6 +2,7 @@
 GRBL 0.9 communication protocol implementation.
 """
 import asyncio
+import inspect
 import re
 import serial
 from typing import Optional, Dict
@@ -141,13 +142,24 @@ class GRBLController:
                 if response == 'ok':
                     return response
                 elif response.startswith('error:'):
-                    error_code = int(response.split(':')[1])
-                    error_msg = self.ERROR_CODES.get(error_code, "Unknown error")
-                    raise Exception(f"GRBL Error {error_code}: {error_msg}")
+                    # Parse error code, handle both numeric and text errors
+                    error_part = response.split(':', 1)[1].strip()
+                    try:
+                        error_code = int(error_part)
+                        error_msg = self.ERROR_CODES.get(error_code, "Unknown error")
+                        raise Exception(f"GRBL Error {error_code}: {error_msg}")
+                    except ValueError:
+                        # Error is not numeric, just pass the message
+                        raise Exception(f"GRBL Error: {error_part}")
                 elif response.startswith('ALARM:'):
-                    alarm_code = int(response.split(':')[1])
-                    alarm_msg = self.ALARM_CODES.get(alarm_code, "Unknown alarm")
-                    raise Exception(f"GRBL Alarm {alarm_code}: {alarm_msg}")
+                    alarm_part = response.split(':', 1)[1].strip()
+                    try:
+                        alarm_code = int(alarm_part)
+                        alarm_msg = self.ALARM_CODES.get(alarm_code, "Unknown alarm")
+                        raise Exception(f"GRBL Alarm {alarm_code}: {alarm_msg}")
+                    except ValueError:
+                        # Alarm is not numeric, just pass the message
+                        raise Exception(f"GRBL Alarm: {alarm_part}")
                 elif response.startswith('<'):
                     # Status report, ignore
                     continue
@@ -211,7 +223,11 @@ class GRBLController:
                 
                 # Progress callback
                 if progress_callback and i % 10 == 0:
-                    await progress_callback(i, total_lines)
+                    # Handle both async and sync callbacks
+                    if inspect.iscoroutinefunction(progress_callback):
+                        await progress_callback(i, total_lines)
+                    else:
+                        progress_callback(i, total_lines)
             
             # Wait for remaining responses
             while char_counter:

@@ -54,7 +54,7 @@ Examples:
                        help='Invert result (white background)')
     parser.add_argument('--width', '-w', type=float, default=150,
                        help='Target width in mm (default: 150)')
-    parser.add_argument('--height', '-h', type=float, default=100,
+    parser.add_argument('--height', type=float, default=100,
                        help='Target height in mm (default: 100)')
     parser.add_argument('--preview', '-p', action='store_true',
                        help='Show preview window')
@@ -62,6 +62,9 @@ Examples:
                        help='Plot directly to AX5 plotter')
     parser.add_argument('--pen', choices=['marker', 'ballpoint', 'fountain'],
                        default='ballpoint', help='Pen profile for plotting (default: ballpoint)')
+    parser.add_argument('--gcode', type=str, help='Output G-code file path')
+    parser.add_argument('--optimize', action='store_true',
+                       help='Use vpype optimization (requires vpype installed)')
     
     args = parser.parse_args()
     
@@ -111,16 +114,30 @@ Examples:
     processor.image_to_svg(processed, svg_path, args.width, args.height)
     print(f"SVG saved: {svg_path}")
     
+    # Generate G-code if requested
+    if args.gcode or args.plot:
+        converter = SVGConverter()
+        
+        # Determine G-code path
+        if args.gcode:
+            gcode_path = args.gcode
+        else:
+            gcode_path = svg_path.replace('.svg', '.gcode')
+        
+        print(f"Converting to G-code: {gcode_path}")
+        converter.convert(svg_path, gcode_path, pen_profile=args.pen, optimize=args.optimize)
+        print(f"G-code saved: {gcode_path}")
+    
     # Plot if requested
     if args.plot:
         print("Plotting to AX5 plotter...")
         
         try:
-            # Convert SVG to G-code
-            converter = SVGConverter()
-            gcode_path = svg_path.replace('.svg', '.gcode')
-            converter.convert(svg_path, gcode_path, pen_profile=args.pen)
-            print(f"G-code generated: {gcode_path}")
+            # G-code path already determined above
+            if not args.gcode:
+                gcode_path = svg_path.replace('.svg', '.gcode')
+            else:
+                gcode_path = args.gcode
             
             # Connect and plot
             async def plot_image():
