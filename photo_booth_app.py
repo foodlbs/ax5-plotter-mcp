@@ -59,15 +59,14 @@ STYLE_PROMPTS = {
 }
 
 
-# Color scheme - Modern startup theme
-PURPLE = "#A100FF"
-BG_COLOR = "#0a0a0a"  # Near black background
-CARD_BG = "#1a1a1a"  # Dark card background
-CARD_BORDER = "#2a2a2a"  # Subtle border
-TEXT_COLOR = "#ffffff"
-TEXT_SECONDARY = "#a0a0a0"
-ACCENT_COLOR = PURPLE
-BUTTON_HOVER = "#8a00cc"
+# Color scheme - Standard UI colors (lower contrast)
+BG_COLOR = "#f0f0f0"  # Light gray background
+CARD_BG = "#ffffff"  # White cards
+CARD_BORDER = "#d0d0d0"  # Light border
+TEXT_COLOR = "#2c3e50"  # Dark blue-gray text
+TEXT_SECONDARY = "#7f8c8d"  # Gray secondary text
+ACCENT_COLOR = "#3498db"  # Blue accent
+BUTTON_HOVER = "#2980b9"  # Darker blue on hover
 
 class PhotoBoothApp:
     """Photo booth application with queue management."""
@@ -173,11 +172,25 @@ class PhotoBoothApp:
         self.output_base_dir = Path("output/saved_images")
         self.output_base_dir.mkdir(parents=True, exist_ok=True)
         
-        # AI providers
-        self.anthropic_api_key = None
-        self.openai_api_key = None
-        self.gemini_api_key = None
+        # AI providers - load from config first, can be overridden via UI
+        ai_config = self.config.get('ai', {})
+        api_keys = ai_config.get('api_keys', {})
+        
+        self.anthropic_api_key = api_keys.get('anthropic') or None
+        self.openai_api_key = api_keys.get('openai') or None
+        self.gemini_api_key = api_keys.get('gemini') or None
+        
+        # Load model names from config
+        models = ai_config.get('models', {})
+        self.anthropic_model = models.get('anthropic', 'claude-3-5-sonnet-20241022')
+        self.openai_model = models.get('openai', 'gpt-4o')
+        self.gemini_model = models.get('gemini', 'gemini-2.5-flash')
+        
         self.ai_generator = None
+        
+        # Plotter connection
+        self.plotter = None
+        self.plotter_connected = False
         
         # UI
         self.setup_ui()
@@ -199,6 +212,35 @@ class PhotoBoothApp:
         except Exception as e:
             logger.error(f"Error loading config: {e}")
             return {}
+    
+    def on_streaming_progress(self, current: int, total: int):
+        """Callback for G-code streaming progress."""
+        percentage = int((current / total) * 100) if total > 0 else 0
+        status_text = f"Streaming line {current} of {total} ({percentage}%)"
+        self.update_streaming_progress(current, total, status_text)
+    
+    def update_streaming_progress(self, current: int, total: int, status: str):
+        """Update streaming progress display (thread-safe)."""
+        try:
+            percentage = int((current / total) * 100) if total > 0 else 0
+            
+            # Update UI from main thread
+            self.root.after(0, lambda: self.streaming_progress.config(value=percentage))
+            self.root.after(0, lambda: self.streaming_label.config(text=status))
+            
+            # If complete, reset after 3 seconds
+            if percentage >= 100:
+                self.root.after(3000, self.clear_streaming_progress)
+        except Exception as e:
+            logger.error(f"Error updating streaming progress: {e}")
+    
+    def clear_streaming_progress(self):
+        """Clear streaming progress display."""
+        try:
+            self.streaming_progress.config(value=0)
+            self.streaming_label.config(text="No active streaming")
+        except Exception as e:
+            logger.error(f"Error clearing streaming progress: {e}")
     
     def setup_ui(self):
         """Create UI layout."""
@@ -412,6 +454,26 @@ class PhotoBoothApp:
         )
         self.queue_stats_label.pack()
         
+        # Streaming progress frame
+        progress_frame = ttk.LabelFrame(queue_frame, text="G-code Streaming Progress", padding="10")
+        progress_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        # Progress label
+        self.streaming_label = ttk.Label(
+            progress_frame,
+            text="No active streaming",
+            font=('Arial', 9)
+        )
+        self.streaming_label.pack(anchor=tk.W)
+        
+        # Progress bar
+        self.streaming_progress = ttk.Progressbar(
+            progress_frame,
+            mode='determinate',
+            length=400
+        )
+        self.streaming_progress.pack(fill=tk.X, pady=(5, 0))
+        
         # Queue list
         list_frame = ttk.Frame(queue_frame)
         list_frame.pack(fill=tk.BOTH, expand=True)
@@ -421,7 +483,7 @@ class PhotoBoothApp:
         
         self.queue_tree = ttk.Treeview(
             list_frame,
-            columns=('Name', 'Style', 'Status', 'Time'),
+            columns=('Name', 'Style', 'Status', 'Retries', 'Time'),
             show='headings',
             yscrollcommand=scrollbar.set,
             height=10
@@ -429,11 +491,13 @@ class PhotoBoothApp:
         self.queue_tree.heading('Name', text='Name')
         self.queue_tree.heading('Style', text='Style')
         self.queue_tree.heading('Status', text='Status')
+        self.queue_tree.heading('Retries', text='Retries')
         self.queue_tree.heading('Time', text='Time')
         
         self.queue_tree.column('Name', width=120)
         self.queue_tree.column('Style', width=100)
-        self.queue_tree.column('Status', width=100)
+        self.queue_tree.column('Status', width=120)
+        self.queue_tree.column('Retries', width=60)
         self.queue_tree.column('Time', width=80)
         
         self.queue_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
@@ -445,14 +509,37 @@ class PhotoBoothApp:
         
         ttk.Button(
             queue_ctrl_frame,
-            text="Cancel Selected",
-            command=self.cancel_selected_job
+            text="🖨️ Connect Printer",
+            command=self.connect_printer,
+            style='Accent.TButton'
         ).pack(side=tk.LEFT, padx=5)
         
         ttk.Button(
             queue_ctrl_frame,
-            text="Refresh",
-            command=self.update_queue_display
+            text="✅ Approve & Print",
+            command=self.approve_selected_job,
+            style='Accent.TButton'
+        ).pack(side=tk.LEFT, padx=5)
+        
+        ttk.Button(
+            queue_ctrl_frame,
+            text="🔄 Retry Failed",
+            command=self.retry_selected_job,
+            style='Accent.TButton'
+        ).pack(side=tk.LEFT, padx=5)
+        
+        ttk.Button(
+            queue_ctrl_frame,
+            text="❌ Cancel Selected",
+            command=self.cancel_selected_job,
+            style='Accent.TButton'
+        ).pack(side=tk.LEFT, padx=5)
+        
+        ttk.Button(
+            queue_ctrl_frame,
+            text="🔄 Refresh",
+            command=self.update_queue_display,
+            style='Accent.TButton'
         ).pack(side=tk.LEFT, padx=5)
         
         # Initial queue update
@@ -598,7 +685,10 @@ class PhotoBoothApp:
                         provider=provider,
                         anthropic_key=self.anthropic_api_key,
                         openai_key=self.openai_api_key,
-                        gemini_key=self.gemini_api_key
+                        gemini_key=self.gemini_api_key,
+                        anthropic_model=self.anthropic_model,
+                        openai_model=self.openai_model,
+                        gemini_model=self.gemini_model
                     )
                 else:
                     self.ai_generator.set_provider(provider)
@@ -623,6 +713,25 @@ class PhotoBoothApp:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             self.processed_image_path = temp_dir / f"preview_{timestamp}.png"
             cv2.imwrite(str(self.processed_image_path), processed_img)
+            
+            # Generate G-code immediately after processing
+            from src.utils.svg_converter import SVGConverter
+            converter = SVGConverter()
+            
+            gcode_dir = Path("output/gcode")
+            gcode_dir.mkdir(parents=True, exist_ok=True)
+            gcode_path = gcode_dir / f"preview_{timestamp}.gcode"
+            
+            logger.info(f"Generating G-code from processed image...")
+            try:
+                converter.convert_image_to_gcode(
+                    str(self.processed_image_path),
+                    str(gcode_path)
+                )
+                logger.info(f"G-code generated: {gcode_path}")
+            except Exception as gcode_error:
+                logger.warning(f"G-code generation failed: {gcode_error}")
+                # Continue even if G-code fails
             
             # Display processed image
             # Convert to RGB for display
@@ -657,6 +766,7 @@ class PhotoBoothApp:
             messagebox.showinfo(
                 "Preview Ready",
                 f"✅ Your {style.value} style preview is ready!\n\n"
+                f"G-code generated and ready for plotting.\n\n"
                 "If you like it, click 'Add to Print Queue'.\n"
                 "To try a different style, select it and click 'Generate Preview' again."
             )
@@ -715,6 +825,11 @@ class PhotoBoothApp:
                 ai_provider=ai_provider
             )
             
+            # Set status to pending approval (requires manual approval before printing)
+            job = self.print_queue.get_job(job_id)
+            if job:
+                job.status = JobStatus.PENDING_APPROVAL
+            
             # Save queue state
             self.print_queue.save_to_file(self.queue_file)
             
@@ -724,10 +839,9 @@ class PhotoBoothApp:
                 "Added to Queue",
                 f"Thank you {name}!\n\n"
                 f"Your {style.value} portrait has been added to the queue.\n"
+                f"⚠️ Requires manual approval before printing.\n"
                 f"Queue position: {position}\n\n"
-                f"Your artwork will be saved in:\n"
-                f"output/saved_images/{name.replace(' ', '_')}/\n\n"
-                f"You can pick it up from the folder when processing completes."
+                f"Go to Queue Management tab to approve and print."
             )
             
             # Clear form
@@ -755,13 +869,16 @@ class PhotoBoothApp:
         """Worker thread that processes queue jobs."""
         while self.processing_active:
             try:
-                # Get next job
+                # Get next job (only approved jobs)
                 job_id = self.print_queue.get_next_job()
                 
                 if job_id:
                     job = self.print_queue.get_job(job_id)
-                    if job:
+                    # Only process if approved
+                    if job and job.approved_for_print:
                         self.process_job(job)
+                    elif job and not job.approved_for_print:
+                        logger.info(f"Job {job_id} waiting for approval")
                     
                     # Save queue state after processing
                     self.print_queue.save_to_file(self.queue_file)
@@ -832,8 +949,31 @@ class PhotoBoothApp:
             logger.info(f"G-code generated: {user_gcode_path}")
             logger.info(f"All files saved to: {user_folder}")
             
-            # TODO: Actually send to plotter when connected
-            # For now, just mark as complete
+            # Stream to plotter with progress tracking
+            if self.plotter and self.plotter_connected:
+                # Read G-code file
+                with open(user_gcode_path, 'r') as f:
+                    gcode_content = f.read()
+                
+                # Update UI to show streaming started
+                self.update_streaming_progress(0, 100, "Starting G-code streaming...")
+                
+                # Stream with progress callback
+                import asyncio
+                success = asyncio.run(
+                    self.plotter.stream_gcode(
+                        str(user_gcode_path),
+                        progress_callback=self.on_streaming_progress
+                    )
+                )
+                
+                if not success:
+                    raise Exception("G-code streaming failed")
+                
+                # Clear progress display
+                self.update_streaming_progress(100, 100, "Streaming complete!")
+            else:
+                logger.info("Plotter not connected - skipping streaming")
             
             # Mark complete
             self.print_queue.update_status(job.job_id, JobStatus.COMPLETED)
@@ -852,8 +992,9 @@ class PhotoBoothApp:
         try:
             # Update stats
             stats = self.print_queue.get_statistics()
+            pending = sum(1 for job in self.print_queue.get_all_jobs() if job.status == JobStatus.PENDING_APPROVAL)
             self.queue_stats_label.config(
-                text=f"Queued: {stats['queued']} | "
+                text=f"Pending: {pending} | Queued: {stats['queued']} | "
                      f"Processing: {stats['processing'] + stats['plotting']} | "
                      f"Completed: {stats['completed']}"
             )
@@ -869,6 +1010,7 @@ class PhotoBoothApp:
                 
                 # Status with emoji
                 status_icons = {
+                    JobStatus.PENDING_APPROVAL: "⏸️",
                     JobStatus.QUEUED: "⏳",
                     JobStatus.PROCESSING: "⚙️",
                     JobStatus.PLOTTING: "🖨️",
@@ -885,6 +1027,7 @@ class PhotoBoothApp:
                         job.name,
                         job.style.value.capitalize(),
                         status_text,
+                        job.retry_count,
                         time_str
                     ),
                     tags=(job.job_id,)
@@ -913,6 +1056,123 @@ class PhotoBoothApp:
                 messagebox.showinfo("Cancelled", f"Job for {job.name} has been cancelled")
             else:
                 messagebox.showwarning("Cannot Cancel", "Only queued jobs can be cancelled")
+    
+    def approve_selected_job(self):
+        """Approve selected job for printing."""
+        selection = self.queue_tree.selection()
+        if not selection:
+            messagebox.showwarning("No Selection", "Please select a job to approve")
+            return
+        
+        item = selection[0]
+        tags = self.queue_tree.item(item, 'tags')
+        
+        if tags:
+            job_id = tags[0]
+            job = self.print_queue.get_job(job_id)
+            
+            if job and job.status == JobStatus.PENDING_APPROVAL:
+                job.approved_for_print = True
+                job.status = JobStatus.QUEUED
+                self.print_queue.save_to_file(self.queue_file)
+                messagebox.showinfo("Approved", f"Job for {job.name} has been approved for printing!")
+                logger.info(f"Job {job_id} approved for printing")
+            else:
+                messagebox.showwarning("Cannot Approve", "Only pending jobs can be approved")
+    
+    def retry_selected_job(self):
+        """Retry a failed job."""
+        selection = self.queue_tree.selection()
+        if not selection:
+            messagebox.showwarning("No Selection", "Please select a failed job to retry")
+            return
+        
+        item = selection[0]
+        tags = self.queue_tree.item(item, 'tags')
+        
+        if tags:
+            job_id = tags[0]
+            job = self.print_queue.get_job(job_id)
+            
+            if job and job.status == JobStatus.FAILED:
+                job.status = JobStatus.PENDING_APPROVAL
+                job.retry_count += 1
+                job.error_message = None
+                job.approved_for_print = False
+                self.print_queue.save_to_file(self.queue_file)
+                messagebox.showinfo("Retry", f"Job for {job.name} moved back to queue (Retry #{job.retry_count})")
+                logger.info(f"Job {job_id} retry #{job.retry_count}")
+            else:
+                messagebox.showwarning("Cannot Retry", "Only failed jobs can be retried")
+    
+    def connect_printer(self):
+        """Connect to the AX5 plotter."""
+        try:
+            # Import plotter classes
+            from src.plotter.grbl import GRBLController
+            
+            # Create connection dialog
+            dialog = tk.Toplevel(self.root)
+            dialog.title("Connect to Plotter")
+            dialog.geometry("400x200")
+            dialog.transient(self.root)
+            dialog.grab_set()
+            dialog.configure(bg=BG_COLOR)
+            
+            # Content frame
+            content = ttk.Frame(dialog, padding="20")
+            content.pack(fill=tk.BOTH, expand=True)
+            
+            ttk.Label(content, text="Serial Port:", font=('SF Pro Text', 11)).pack(anchor=tk.W, pady=(0, 5))
+            
+            port_var = tk.StringVar(value="/dev/cu.usbserial-0001")
+            port_entry = ttk.Entry(content, textvariable=port_var, width=40)
+            port_entry.pack(fill=tk.X, pady=(0, 10))
+            
+            ttk.Label(content, text="Baud Rate:", font=('SF Pro Text', 11)).pack(anchor=tk.W, pady=(0, 5))
+            
+            baud_var = tk.StringVar(value="115200")
+            baud_entry = ttk.Entry(content, textvariable=baud_var, width=40)
+            baud_entry.pack(fill=tk.X, pady=(0, 20))
+            
+            def do_connect():
+                try:
+                    # Create plotter instance
+                    port = port_var.get().strip()
+                    baud = int(baud_var.get().strip())
+                    
+                    self.plotter = GRBLController(
+                        port=port,
+                        baud_rate=baud
+                    )
+                    
+                    # Connect asynchronously
+                    import asyncio
+                    success = asyncio.run(self.plotter.connect())
+                    
+                    if success:
+                        self.plotter_connected = True
+                        messagebox.showinfo("Success", f"Connected to plotter on {port}")
+                        dialog.destroy()
+                        logger.info(f"Plotter connected: {port} @ {baud}")
+                    else:
+                        raise Exception("Connection failed")
+                        
+                except Exception as e:
+                    messagebox.showerror("Connection Error", f"Failed to connect:\n{e}")
+                    logger.error(f"Plotter connection error: {e}")
+            
+            # Connect button
+            ttk.Button(
+                content,
+                text="Connect",
+                command=do_connect,
+                style='Accent.TButton'
+            ).pack(fill=tk.X)
+            
+        except Exception as e:
+            logger.error(f"Error opening connection dialog: {e}")
+            messagebox.showerror("Error", f"Failed to open connection dialog:\n{e}")
     
     def configure_api_keys(self):
         """Open dialog to configure API keys."""

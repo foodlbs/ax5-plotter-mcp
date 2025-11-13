@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 class JobStatus(Enum):
     """Print job status."""
     QUEUED = "queued"
+    PENDING_APPROVAL = "pending_approval"  # New status - waiting for manual approval
     PROCESSING = "processing"
     PLOTTING = "plotting"
     COMPLETED = "completed"
@@ -54,6 +55,8 @@ class PrintJob:
     error_message: Optional[str] = None
     processed_image_path: Optional[str] = None
     gcode_path: Optional[str] = None
+    retry_count: int = 0  # Track number of retries
+    approved_for_print: bool = False  # Manual approval flag
     
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization."""
@@ -70,7 +73,9 @@ class PrintJob:
             'completed_at': self.completed_at,
             'error_message': self.error_message,
             'processed_image_path': self.processed_image_path,
-            'gcode_path': self.gcode_path
+            'gcode_path': self.gcode_path,
+            'retry_count': self.retry_count,
+            'approved_for_print': self.approved_for_print
         }
     
     @classmethod
@@ -89,7 +94,9 @@ class PrintJob:
             completed_at=data.get('completed_at'),
             error_message=data.get('error_message'),
             processed_image_path=data.get('processed_image_path'),
-            gcode_path=data.get('gcode_path')
+            gcode_path=data.get('gcode_path'),
+            retry_count=data.get('retry_count', 0),
+            approved_for_print=data.get('approved_for_print', False)
         )
 
 

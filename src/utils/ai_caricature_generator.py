@@ -35,7 +35,10 @@ class AICaricatureGenerator:
         provider: AIProvider = AIProvider.ANTHROPIC,
         anthropic_key: Optional[str] = None,
         openai_key: Optional[str] = None,
-        gemini_key: Optional[str] = None
+        gemini_key: Optional[str] = None,
+        anthropic_model: str = "claude-3-5-sonnet-20241022",
+        openai_model: str = "gpt-4o",
+        gemini_model: str = "gemini-2.5-flash"
     ):
         """
         Initialize the AI caricature generator.
@@ -45,11 +48,19 @@ class AICaricatureGenerator:
             anthropic_key: Anthropic API key (or use ANTHROPIC_API_KEY env var)
             openai_key: OpenAI API key (or use OPENAI_API_KEY env var)
             gemini_key: Google Gemini API key (or use GOOGLE_API_KEY env var)
+            anthropic_model: Anthropic model name
+            openai_model: OpenAI model name
+            gemini_model: Gemini model name
         """
         self.provider = provider
         self.anthropic_key = anthropic_key or os.environ.get('ANTHROPIC_API_KEY')
         self.openai_key = openai_key or os.environ.get('OPENAI_API_KEY')
         self.gemini_key = gemini_key or os.environ.get('GOOGLE_API_KEY')
+        
+        # Store model names from config
+        self.anthropic_model_name = anthropic_model
+        self.openai_model_name = openai_model
+        self.gemini_model_name = gemini_model
         
         # Initialize clients
         self.anthropic_client = None
@@ -69,22 +80,26 @@ class AICaricatureGenerator:
             if provider == AIProvider.ANTHROPIC and self.anthropic_key:
                 import anthropic
                 self.anthropic_client = anthropic.Anthropic(api_key=self.anthropic_key)
-                self.anthropic_model = "claude-3-5-haiku-20241022"
-                logger.info("Initialized Anthropic Claude")
+                self.anthropic_model = self.anthropic_model_name
+                logger.info(f"Initialized Anthropic Claude ({self.anthropic_model})")
                 return True
                 
             elif provider == AIProvider.OPENAI and self.openai_key:
                 import openai
                 self.openai_client = openai.OpenAI(api_key=self.openai_key)
-                self.openai_model = "gpt-4o-mini"  # Cost-effective vision model
-                logger.info("Initialized OpenAI GPT-4V")
+                self.openai_model = self.openai_model_name
+                logger.info(f"Initialized OpenAI ({self.openai_model})")
                 return True
                 
             elif provider == AIProvider.GEMINI and self.gemini_key:
                 import google.generativeai as genai
                 genai.configure(api_key=self.gemini_key)
-                self.gemini_model = genai.GenerativeModel('gemini-1.5-flash')  # Fast & affordable
-                logger.info("Initialized Google Gemini")
+                # For Gemini, append -image suffix if not already present
+                model_name = self.gemini_model_name
+                if 'image' not in model_name:
+                    model_name = f"{model_name}-image"
+                self.gemini_model = genai.GenerativeModel(model_name)
+                logger.info(f"Initialized Google Gemini ({model_name})")
                 return True
                 
         except Exception as e:
@@ -147,25 +162,32 @@ class AICaricatureGenerator:
     
     def _get_ai_prompt(self) -> str:
         """Get the standardized prompt for all AI providers."""
-        return """Analyze this image and describe how to create a simple line sketch suitable for a pen plotter - clean, bold contours with minimal detail.
+        return """Analyze this image and create a FUNNY, EXAGGERATED caricature description for a pen plotter sketch!
 
-IMPORTANT: The output must be a simple line drawing with:
-- Clear, bold outlines only (no dense shading or crosshatching)
-- Minimal interior details - only essential features
-- Strong contours that define the main shapes
-- Sparse lines that can be easily plotted with a single pen
+MAKE IT FUNNY! Think cartoon comedy, playful exaggeration, and humorous features:
+- EXAGGERATE distinctive features (big smile = HUGE grin, glasses = MASSIVE frames)
+- Add playful, comedic elements to the character
+- Make expressions more dramatic and funny
+- Think SNL sketch character or cartoon comedy style
+- Add personality and humor to the line work
 
-Focus on identifying:
-1. The 3-5 MOST distinctive features to emphasize
-2. Main outline/silhouette contours only
-3. Which facial features need simple bold lines (eyes, nose, mouth)
-4. Hair or head shape as simple outline only
-5. Avoid: dense textures, shading, fine details, or complex patterns
+The output must be a simple, HILARIOUS line drawing with:
+- Clear, bold, EXAGGERATED outlines (bigger features = more fun!)
+- Comedic proportions (think caricature artist at a fair)
+- Strong, playful contours that emphasize funny features
+- Simple lines but MAXIMUM personality
 
-Provide a brief description emphasizing SIMPLICITY and CLARITY for pen plotting."""
+Focus on:
+1. What makes this person/subject FUNNY or unique?
+2. Which features can be EXAGGERATED for comedy? (big smile, wild hair, unique expression)
+3. How to add humor through simple bold lines
+4. Playful, cartoon-style personality
+5. Keep it simple but make it LAUGH-OUT-LOUD funny
+
+Create a description for a pen plotter that will make people smile and laugh when they see the result!"""
     
     def _generate_with_anthropic(self, image: np.ndarray) -> str:
-        """Generate description using Anthropic Claude."""
+        """Generate description using Anthropic Claude (claude-3-5-sonnet-20241022)."""
         image_data = self.image_to_base64(image)
         
         message = self.anthropic_client.messages.create(
@@ -195,7 +217,7 @@ Provide a brief description emphasizing SIMPLICITY and CLARITY for pen plotting.
         return message.content[0].text
     
     def _generate_with_openai(self, image: np.ndarray) -> str:
-        """Generate description using OpenAI GPT-4V."""
+        """Generate description using OpenAI GPT-4o (gpt-4o)."""
         image_data = self.image_to_base64(image)
         
         response = self.openai_client.chat.completions.create(
@@ -223,7 +245,7 @@ Provide a brief description emphasizing SIMPLICITY and CLARITY for pen plotting.
         return response.choices[0].message.content
     
     def _generate_with_gemini(self, image: np.ndarray) -> str:
-        """Generate description using Google Gemini."""
+        """Generate description using Google Gemini (gemini-2.5-flash-image)."""
         # Convert to PIL for Gemini
         if len(image.shape) == 3 and image.shape[2] == 3:
             image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
@@ -284,14 +306,15 @@ Provide a brief description emphasizing SIMPLICITY and CLARITY for pen plotting.
     
     def enhance_edges(self, image: np.ndarray, description: str = "") -> np.ndarray:
         """
-        Apply edge detection with optional AI guidance.
+        Apply edge detection with cartoon-style bold outlines.
+        Creates fun, exaggerated line drawings similar to comic/cartoon style.
         
         Args:
             image: Input image
             description: AI-generated description (optional)
             
         Returns:
-            Edge-detected image with black lines on white background
+            Edge-detected image with black lines on white background (cartoon style)
         """
         # Convert to grayscale
         if len(image.shape) == 3:
@@ -301,31 +324,54 @@ Provide a brief description emphasizing SIMPLICITY and CLARITY for pen plotting.
         
         logger.info(f"Input image: shape={gray.shape}, dtype={gray.dtype}, mean={np.mean(gray):.1f}")
         
-        # Apply bilateral filter to preserve edges while smoothing noise
-        smooth = cv2.bilateralFilter(gray, 9, 75, 75)
+        # Step 1: Reduce noise while preserving edges
+        gray = cv2.bilateralFilter(gray, 9, 75, 75)
         
-        # Apply adaptive histogram equalization for better contrast
-        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-        enhanced = clahe.apply(smooth)
+        # Step 2: Enhance contrast for better feature detection
+        clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8))
+        enhanced = clahe.apply(gray)
         
-        # Use lower Canny thresholds for cleaner, bolder lines
-        edges = cv2.Canny(enhanced, 30, 90)
+        # Step 3: Detect edges with multiple methods for cartoon style
+        # Method 1: Canny for fine details
+        edges_canny = cv2.Canny(enhanced, 20, 60)
         
-        logger.info(f"Edge pixels detected: {np.count_nonzero(edges)}")
+        # Method 2: Laplacian for blob detection (good for features like eyes, nose)
+        laplacian = cv2.Laplacian(enhanced, cv2.CV_64F)
+        laplacian = np.uint8(np.absolute(laplacian))
+        _, edges_laplacian = cv2.threshold(laplacian, 20, 255, cv2.THRESH_BINARY)
         
-        # Dilate to make lines bolder and more connected
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-        edges = cv2.dilate(edges, kernel, iterations=1)
+        # Method 3: Sobel for strong directional edges
+        sobelx = cv2.Sobel(enhanced, cv2.CV_64F, 1, 0, ksize=3)
+        sobely = cv2.Sobel(enhanced, cv2.CV_64F, 0, 1, ksize=3)
+        sobel_magnitude = np.sqrt(sobelx**2 + sobely**2)
+        sobel_magnitude = np.uint8(sobel_magnitude)
+        _, edges_sobel = cv2.threshold(sobel_magnitude, 30, 255, cv2.THRESH_BINARY)
         
-        # Close small gaps
-        edges = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, kernel, iterations=1)
+        # Combine all edge detection methods for rich cartoon-style lines
+        edges = cv2.bitwise_or(edges_canny, edges_laplacian)
+        edges = cv2.bitwise_or(edges, edges_sobel)
         
-        logger.info(f"After morphology: {np.count_nonzero(edges)} edge pixels")
+        logger.info(f"Combined edge pixels detected: {np.count_nonzero(edges)}")
         
-        # Return with black lines on white background
+        # Step 4: Make lines BOLD and CONTINUOUS (cartoon style!)
+        # Use larger kernel for bold comic-book style lines
+        kernel_bold = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (4, 4))
+        edges = cv2.dilate(edges, kernel_bold, iterations=2)
+        
+        # Connect nearby lines for smoother cartoon appearance
+        kernel_connect = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+        edges = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, kernel_connect, iterations=2)
+        
+        # Smooth the edges slightly to reduce jaggedness
+        edges = cv2.GaussianBlur(edges, (3, 3), 0)
+        _, edges = cv2.threshold(edges, 127, 255, cv2.THRESH_BINARY)
+        
+        logger.info(f"After cartoon-style processing: {np.count_nonzero(edges)} edge pixels")
+        
+        # Return with black lines on white background (classic cartoon style)
         result = cv2.bitwise_not(edges)
         
-        logger.info(f"Final result: mean={np.mean(result):.1f}, edge pixels={np.count_nonzero(edges)}")
+        logger.info(f"Final cartoon result: mean={np.mean(result):.1f}, edge pixels={np.count_nonzero(edges)}")
         
         return result
     

@@ -13,7 +13,9 @@
       "completed_at": 1763013858.486079,
       "error_message": "AICaricatureGenerator.__init__() got an unexpected keyword argument 'anthropic_api_key'",
       "processed_image_path": null,
-      "gcode_path": null
+      "gcode_path": null,
+      "retry_count": 0,
+      "approved_for_print": false
     },
     {
       "job_id": "807f6ec6-11ff-4c2b-bcf9-f7997f3f1dd2",
@@ -28,7 +30,43 @@
       "completed_at": 1763072275.151655,
       "error_message": "expected str, bytes or os.PathLike object, not dict",
       "processed_image_path": "output/saved_images/rahul_rahulpatel052197_at_gmail_com/comic_20251113_171755.png",
-      "gcode_path": null
+      "gcode_path": null,
+      "retry_count": 0,
+      "approved_for_print": false
+    },
+    {
+      "job_id": "4c51f8be-9e36-4d48-8123-21b5c31eed7a",
+      "name": "rahul",
+      "email": "rahulpatel052197@gmail.com",
+      "image_path": "output/processed/processed_20251113_175515.png",
+      "style": "comic",
+      "ai_provider": "Google Gemini",
+      "status": "pending_approval",
+      "created_at": 1763074515.818957,
+      "started_at": null,
+      "completed_at": null,
+      "error_message": null,
+      "processed_image_path": null,
+      "gcode_path": null,
+      "retry_count": 0,
+      "approved_for_print": false
+    },
+    {
+      "job_id": "f5129790-be89-4500-8114-1af03b62d4db",
+      "name": "rahulpatel",
+      "email": "rahulpatel@gmail.com",
+      "image_path": "output/processed/processed_20251113_182203.png",
+      "style": "comic",
+      "ai_provider": "None (Canny)",
+      "status": "pending_approval",
+      "created_at": 1763076123.0444212,
+      "started_at": null,
+      "completed_at": null,
+      "error_message": null,
+      "processed_image_path": null,
+      "gcode_path": null,
+      "retry_count": 0,
+      "approved_for_print": false
     }
   ]
 }
