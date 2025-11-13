@@ -35,8 +35,6 @@ from pathlib import Path
 # Add src to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
 
-from src.plotter.ax5 import AX5Plotter
-from src.utils.svg_converter import SVGConverter
 from src.utils.ai_caricature_generator import AICaricatureGenerator, AIProvider
 from src.utils.print_queue import PrintQueue, PrintJob, JobStatus, ImageStyle
 
@@ -693,13 +691,14 @@ class PhotoBoothApp:
                 else:
                     self.ai_generator.set_provider(provider)
                 
-                # Generate with AI
+                # Send original captured image directly to AI - let AI create the caricature
+                # AI will generate the actual caricature image, not just edge detection
                 processed_img, description, provider_used = self.ai_generator.generate_caricature(
                     self.captured_frame
                 )
                 logger.info(f"AI processed with {provider_used.value}: {description}")
             else:
-                # Use Canny edge detection
+                # Fallback: Use Canny edge detection
                 gray = cv2.cvtColor(self.captured_frame, cv2.COLOR_BGR2GRAY)
                 processed_img = cv2.Canny(gray, 50, 150)
                 logger.info("Processed with Canny edge detection")
@@ -715,23 +714,18 @@ class PhotoBoothApp:
             cv2.imwrite(str(self.processed_image_path), processed_img)
             
             # Generate G-code immediately after processing
-            from src.utils.svg_converter import SVGConverter
-            converter = SVGConverter()
-            
             gcode_dir = Path("output/gcode")
             gcode_dir.mkdir(parents=True, exist_ok=True)
             gcode_path = gcode_dir / f"preview_{timestamp}.gcode"
             
             logger.info(f"Generating G-code from processed image...")
             try:
-                converter.convert_image_to_gcode(
-                    str(self.processed_image_path),
-                    str(gcode_path)
-                )
+                # Generate G-code directly from edge-detected image
+                self._generate_gcode_from_edges(processed_img, str(gcode_path))
                 logger.info(f"G-code generated: {gcode_path}")
-            except Exception as gcode_error:
-                logger.warning(f"G-code generation failed: {gcode_error}")
-                # Continue even if G-code fails
+            except Exception as e:
+                logger.error(f"G-code generation failed: {e}")
+                # Continue anyway - user can still see preview
             
             # Display processed image
             # Convert to RGB for display
@@ -932,14 +926,12 @@ class PhotoBoothApp:
             gcode_filename = f"{job.style.value}_{timestamp}.gcode"
             user_gcode_path = user_folder / gcode_filename
             
-            converter = SVGConverter(self.config)
-            success, svg_path = converter.image_to_svg(
-                str(user_processed_path),  # Use the processed image we just saved
-                str(user_gcode_path)
-            )
+            # Generate G-code directly from the processed edge image
+            processed_img = cv2.imread(str(user_processed_path))
+            if processed_img is None:
+                raise Exception("Failed to load processed image for G-code generation")
             
-            if not success:
-                raise Exception("G-code conversion failed")
+            self._generate_gcode_from_edges(processed_img, str(user_gcode_path))
             
             self.print_queue.update_paths(
                 job.job_id,
@@ -1236,6 +1228,99 @@ class PhotoBoothApp:
         
         ttk.Button(btn_frame, text="Save", command=save_keys).pack(side=tk.LEFT, padx=5)
         ttk.Button(btn_frame, text="Cancel", command=dialog.destroy).pack(side=tk.LEFT, padx=5)
+    
+    def _generate_gcode_from_edges(self, edge_image: np.ndarray, output_path: str):
+        """
+        Generate G-code directly from edge-detected image by tracing contours.
+        
+        Args:
+            edge_image: Edge-detected image (black lines on white, or white lines on black)
+            output_path: Path to save G-code file
+        """
+        # Ensure we have a binary image
+        if len(edge_image.shape) == 3:
+            gray = cv2.cvtColor(edge_image, cv2.COLOR_BGR2GRAY)
+        else:
+            gray = edge_image.copy()
+        
+        # Threshold to binary
+        _, binary = cv2.threshold(gray, 127, 255, cv2.THRESH_BINARY)
+        
+        # Find contours (these are the lines we'll plot)
+        contours, _ = cv2.findContours(binary, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+        
+        logger.info(f"Found {len(contours)} contours to plot")
+        
+        # Get plotter dimensions from config
+        plotter_config = self.config.get('plotter', {})
+        plotter_width = plotter_config.get('width', 210)  # mm
+        plotter_height = plotter_config.get('height', 150)  # mm
+        margin = plotter_config.get('margin', 10)  # mm
+        
+        # Calculate scaling
+        img_height, img_width = gray.shape
+        scale_x = (plotter_width - 2 * margin) / img_width
+        scale_y = (plotter_height - 2 * margin) / img_height
+        scale = min(scale_x, scale_y)  # Use uniform scale to preserve aspect ratio
+        
+        # Calculate offset to center the image
+        scaled_width = img_width * scale
+        scaled_height = img_height * scale
+        offset_x = margin + (plotter_width - 2 * margin - scaled_width) / 2
+        offset_y = margin + (plotter_height - 2 * margin - scaled_height) / 2
+        
+        # Generate G-code
+        with open(output_path, 'w') as f:
+            # Header
+            f.write("; G-code generated from caricature\n")
+            f.write(f"; Image size: {img_width}x{img_height}\n")
+            f.write(f"; Plotter size: {plotter_width}x{plotter_height}mm\n")
+            f.write(f"; Scale: {scale:.4f}\n")
+            f.write(f"; Contours: {len(contours)}\n")
+            f.write("G21 ; Set units to millimeters\n")
+            f.write("G90 ; Absolute positioning\n")
+            f.write("G28 ; Home\n")
+            f.write("M5 ; Pen up\n")
+            f.write("\n")
+            
+            # Draw each contour
+            for i, contour in enumerate(contours):
+                if len(contour) < 3:  # Skip tiny contours
+                    continue
+                
+                # Move to first point (pen up)
+                pt = contour[0][0]
+                x = offset_x + pt[0] * scale
+                y = offset_y + (img_height - pt[1]) * scale  # Flip Y axis
+                f.write(f"; Contour {i+1}\n")
+                f.write(f"G0 X{x:.3f} Y{y:.3f} ; Move to start\n")
+                f.write("M3 S90 ; Pen down\n")
+                f.write("G4 P0.15 ; Dwell\n")
+                
+                # Draw the contour
+                for point in contour[1:]:
+                    pt = point[0]
+                    x = offset_x + pt[0] * scale
+                    y = offset_y + (img_height - pt[1]) * scale  # Flip Y axis
+                    f.write(f"G1 X{x:.3f} Y{y:.3f} F500\n")
+                
+                # Close the contour if needed
+                pt = contour[0][0]
+                x = offset_x + pt[0] * scale
+                y = offset_y + (img_height - pt[1]) * scale
+                f.write(f"G1 X{x:.3f} Y{y:.3f}\n")
+                
+                # Pen up
+                f.write("M5 ; Pen up\n")
+                f.write("G4 P0.15 ; Dwell\n")
+                f.write("\n")
+            
+            # Footer
+            f.write("; End of G-code\n")
+            f.write("M5 ; Pen up\n")
+            f.write("G28 ; Home\n")
+        
+        logger.info(f"G-code written to {output_path}")
     
     def on_closing(self):
         """Handle window close."""

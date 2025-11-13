@@ -333,19 +333,19 @@ Create a description for a pen plotter that will make people smile and laugh whe
         
         # Step 3: Detect edges with multiple methods for cartoon style
         # Method 1: Canny for fine details
-        edges_canny = cv2.Canny(enhanced, 20, 60)
+        edges_canny = cv2.Canny(enhanced, 30, 90)  # Higher thresholds for cleaner lines
         
         # Method 2: Laplacian for blob detection (good for features like eyes, nose)
         laplacian = cv2.Laplacian(enhanced, cv2.CV_64F)
         laplacian = np.uint8(np.absolute(laplacian))
-        _, edges_laplacian = cv2.threshold(laplacian, 20, 255, cv2.THRESH_BINARY)
+        _, edges_laplacian = cv2.threshold(laplacian, 25, 255, cv2.THRESH_BINARY)
         
         # Method 3: Sobel for strong directional edges
         sobelx = cv2.Sobel(enhanced, cv2.CV_64F, 1, 0, ksize=3)
         sobely = cv2.Sobel(enhanced, cv2.CV_64F, 0, 1, ksize=3)
         sobel_magnitude = np.sqrt(sobelx**2 + sobely**2)
         sobel_magnitude = np.uint8(sobel_magnitude)
-        _, edges_sobel = cv2.threshold(sobel_magnitude, 30, 255, cv2.THRESH_BINARY)
+        _, edges_sobel = cv2.threshold(sobel_magnitude, 35, 255, cv2.THRESH_BINARY)
         
         # Combine all edge detection methods for rich cartoon-style lines
         edges = cv2.bitwise_or(edges_canny, edges_laplacian)
@@ -353,20 +353,21 @@ Create a description for a pen plotter that will make people smile and laugh whe
         
         logger.info(f"Combined edge pixels detected: {np.count_nonzero(edges)}")
         
-        # Step 4: Make lines BOLD and CONTINUOUS (cartoon style!)
-        # Use larger kernel for bold comic-book style lines
-        kernel_bold = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (4, 4))
-        edges = cv2.dilate(edges, kernel_bold, iterations=2)
+        # Step 4: Clean up and thin the lines
+        # Use smaller kernel for cleaner, thinner lines
+        kernel_clean = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2, 2))
+        edges = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, kernel_clean, iterations=1)
         
-        # Connect nearby lines for smoother cartoon appearance
-        kernel_connect = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-        edges = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, kernel_connect, iterations=2)
+        # Thin the lines using morphological thinning
+        # This creates single-pixel width lines
+        kernel_thin = np.ones((3, 3), np.uint8)
+        edges = cv2.morphologyEx(edges, cv2.MORPH_OPEN, kernel_thin, iterations=1)
         
-        # Smooth the edges slightly to reduce jaggedness
-        edges = cv2.GaussianBlur(edges, (3, 3), 0)
-        _, edges = cv2.threshold(edges, 127, 255, cv2.THRESH_BINARY)
+        # Optional: slight dilation for visibility (much less than before)
+        kernel_slight = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2, 2))
+        edges = cv2.dilate(edges, kernel_slight, iterations=1)
         
-        logger.info(f"After cartoon-style processing: {np.count_nonzero(edges)} edge pixels")
+        logger.info(f"After thinning: {np.count_nonzero(edges)} edge pixels")
         
         # Return with black lines on white background (classic cartoon style)
         result = cv2.bitwise_not(edges)
