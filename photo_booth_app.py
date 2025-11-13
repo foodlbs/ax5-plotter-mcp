@@ -59,13 +59,97 @@ STYLE_PROMPTS = {
 }
 
 
+# Color scheme - Modern startup theme
+PURPLE = "#A100FF"
+BG_COLOR = "#0a0a0a"  # Near black background
+CARD_BG = "#1a1a1a"  # Dark card background
+CARD_BORDER = "#2a2a2a"  # Subtle border
+TEXT_COLOR = "#ffffff"
+TEXT_SECONDARY = "#a0a0a0"
+ACCENT_COLOR = PURPLE
+BUTTON_HOVER = "#8a00cc"
+
 class PhotoBoothApp:
     """Photo booth application with queue management."""
     
     def __init__(self, root: tk.Tk):
         self.root = root
         self.root.title("AX5 Plotter Photo Booth")
-        self.root.geometry("1400x900")
+        self.root.geometry("1600x950")
+        
+        # Apply modern startup styling
+        self.root.configure(bg=BG_COLOR)
+        
+        # Configure ttk styles with modern look
+        style = ttk.Style()
+        style.theme_use('default')
+        
+        # Frame styles - clean cards
+        style.configure('TFrame', background=BG_COLOR)
+        style.configure('Card.TFrame', background=CARD_BG)
+        
+        # LabelFrame with modern styling
+        style.configure('TLabelframe', 
+                       background=CARD_BG, 
+                       foreground=TEXT_COLOR,
+                       borderwidth=1,
+                       relief='solid')
+        style.configure('TLabelframe.Label', 
+                       background=CARD_BG, 
+                       foreground=ACCENT_COLOR, 
+                       font=('SF Pro Display', 12, 'bold'))
+        
+        # Modern button styles
+        style.configure('Accent.TButton', 
+                       background=ACCENT_COLOR,
+                       foreground='white',
+                       borderwidth=0,
+                       font=('SF Pro Display', 11, 'bold'),
+                       padding=(20, 12))
+        style.map('Accent.TButton',
+                 background=[('active', BUTTON_HOVER), ('disabled', '#555555')],
+                 foreground=[('disabled', '#888888')])
+        
+        # Label styles
+        style.configure('TLabel', 
+                       background=CARD_BG, 
+                       foreground=TEXT_COLOR, 
+                       font=('SF Pro Text', 11))
+        style.configure('Title.TLabel',
+                       background=BG_COLOR,
+                       foreground=TEXT_COLOR,
+                       font=('SF Pro Display', 24, 'bold'))
+        
+        # Entry styles
+        style.configure('Modern.TEntry',
+                       fieldbackground='white',
+                       foreground='black',
+                       borderwidth=1,
+                       relief='solid')
+        
+        # Radiobutton with modern look
+        style.configure('Modern.TRadiobutton',
+                       background=CARD_BG,
+                       foreground=TEXT_COLOR,
+                       font=('SF Pro Text', 10),
+                       indicatorcolor=ACCENT_COLOR)
+        style.map('Modern.TRadiobutton',
+                 background=[('active', CARD_BG)],
+                 foreground=[('selected', ACCENT_COLOR)])
+        
+        # Notebook (tabs) styling
+        style.configure('TNotebook', 
+                       background=BG_COLOR,
+                       borderwidth=0)
+        style.configure('TNotebook.Tab',
+                       background=CARD_BG,
+                       foreground=TEXT_SECONDARY,
+                       padding=[20, 10],
+                       borderwidth=0,
+                       font=('SF Pro Text', 11))
+        style.map('TNotebook.Tab',
+                 background=[('selected', BG_COLOR)],
+                 foreground=[('selected', ACCENT_COLOR)])
         
         # Configuration
         self.config = self.load_config()
@@ -118,8 +202,8 @@ class PhotoBoothApp:
     
     def setup_ui(self):
         """Create UI layout."""
-        # Main container
-        main_frame = ttk.Frame(self.root, padding="10")
+        # Main container with padding
+        main_frame = ttk.Frame(self.root, padding="20")
         main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
         
         self.root.columnconfigure(0, weight=1)
@@ -158,53 +242,58 @@ class PhotoBoothApp:
         preview_frame = ttk.LabelFrame(left_panel, text="Live Preview", padding="10")
         preview_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
         
-        self.live_label = tk.Label(preview_frame, bg='black')
-        self.live_label.pack(fill=tk.BOTH, expand=True)
+        self.live_label = tk.Label(preview_frame, bg='black', borderwidth=0)
+        self.live_label.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
         
         # Captured image
         capture_frame = ttk.LabelFrame(left_panel, text="Captured Photo", padding="10")
         capture_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
         
-        self.capture_label = tk.Label(capture_frame, bg='gray', text="No photo captured")
-        self.capture_label.pack(fill=tk.BOTH, expand=True)
+        self.capture_label = tk.Label(capture_frame, bg=CARD_BG, fg=TEXT_SECONDARY, 
+                                      text="No photo captured", 
+                                      font=('SF Pro Text', 11),
+                                      borderwidth=0)
+        self.capture_label.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
         
         # Capture controls
         controls_frame = ttk.Frame(left_panel)
-        controls_frame.pack(fill=tk.X)
+        controls_frame.pack(fill=tk.X, pady=(10, 0))
         
         ttk.Button(
             controls_frame,
             text="📸 Capture Photo",
-            command=self.capture_photo
-        ).pack(side=tk.LEFT, padx=5)
+            command=self.capture_photo,
+            style='Accent.TButton'
+        ).pack(side=tk.LEFT, padx=(0, 10), expand=True, fill=tk.X)
         
         ttk.Button(
             controls_frame,
             text="🔄 Retake",
-            command=self.clear_capture
-        ).pack(side=tk.LEFT, padx=5)
+            command=self.clear_capture,
+            style='Accent.TButton'
+        ).pack(side=tk.LEFT, expand=True, fill=tk.X)
         
         # Center panel - User info and style
         center_panel = ttk.Frame(parent, padding="5")
         center_panel.grid(row=0, column=1, sticky=(tk.W, tk.E, tk.N, tk.S), padx=10)
         
         # User information
-        info_frame = ttk.LabelFrame(center_panel, text="Your Information", padding="10")
-        info_frame.pack(fill=tk.X, pady=(0, 10))
+        info_frame = ttk.LabelFrame(center_panel, text="Your Information", padding="15")
+        info_frame.pack(fill=tk.X, pady=(0, 15))
         
-        ttk.Label(info_frame, text="Name:").grid(row=0, column=0, sticky=tk.W, pady=5)
-        self.name_entry = ttk.Entry(info_frame, width=30, font=('Arial', 12))
-        self.name_entry.grid(row=0, column=1, sticky=(tk.W, tk.E), pady=5, padx=(10, 0))
+        ttk.Label(info_frame, text="Name:", font=('SF Pro Text', 11)).grid(row=0, column=0, sticky=tk.W, pady=8)
+        self.name_entry = ttk.Entry(info_frame, width=35, font=('SF Pro Text', 12), style='Modern.TEntry')
+        self.name_entry.grid(row=0, column=1, sticky=(tk.W, tk.E), pady=8, padx=(15, 0))
         
-        ttk.Label(info_frame, text="Email:").grid(row=1, column=0, sticky=tk.W, pady=5)
-        self.email_entry = ttk.Entry(info_frame, width=30, font=('Arial', 12))
-        self.email_entry.grid(row=1, column=1, sticky=(tk.W, tk.E), pady=5, padx=(10, 0))
+        ttk.Label(info_frame, text="Email:", font=('SF Pro Text', 11)).grid(row=1, column=0, sticky=tk.W, pady=8)
+        self.email_entry = ttk.Entry(info_frame, width=35, font=('SF Pro Text', 12), style='Modern.TEntry')
+        self.email_entry.grid(row=1, column=1, sticky=(tk.W, tk.E), pady=8, padx=(15, 0))
         
         info_frame.columnconfigure(1, weight=1)
         
         # Style selection
-        style_frame = ttk.LabelFrame(center_panel, text="Choose Your Style", padding="10")
-        style_frame.pack(fill=tk.X, pady=(0, 10))
+        style_frame = ttk.LabelFrame(center_panel, text="Choose Your Style", padding="15")
+        style_frame.pack(fill=tk.X, pady=(0, 15))
         
         self.style_var = tk.StringVar(value=ImageStyle.CARTOON.value)
         
@@ -222,13 +311,14 @@ class PhotoBoothApp:
             col = i % 2
             
             frame = ttk.Frame(style_frame)
-            frame.grid(row=row, column=col, sticky=(tk.W, tk.E), padx=5, pady=5)
+            frame.grid(row=row, column=col, sticky=(tk.W, tk.E), padx=10, pady=8)
             
             radio = ttk.Radiobutton(
                 frame,
                 text=label,
                 variable=self.style_var,
-                value=value
+                value=value,
+                style='Modern.TRadiobutton'
             )
             radio.pack(anchor=tk.W)
             
@@ -261,40 +351,46 @@ class PhotoBoothApp:
         
         ttk.Button(
             ai_frame,
-            text="Configure API Keys",
-            command=self.configure_api_keys
+            text="⚙️ Configure API Keys",
+            command=self.configure_api_keys,
+            style='Accent.TButton'
         ).pack(side=tk.LEFT)
         
         # Action buttons - side by side (BEFORE preview so they're always visible)
         btn_frame = ttk.Frame(center_panel)
-        btn_frame.pack(fill=tk.X, pady=(10, 10))
+        btn_frame.pack(fill=tk.X, pady=(15, 15))
         
         self.generate_btn = ttk.Button(
             btn_frame,
             text="🎨 Generate Preview",
             command=self.generate_preview,
-            state=tk.DISABLED
+            state=tk.DISABLED,
+            style='Accent.TButton'
         )
-        self.generate_btn.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=10, padx=(0, 5))
+        self.generate_btn.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 8))
         
         self.add_queue_btn = ttk.Button(
             btn_frame,
             text="🖨️ Add to Print Queue",
             command=self.add_to_queue,
-            state=tk.DISABLED
+            state=tk.DISABLED,
+            style='Accent.TButton'
         )
-        self.add_queue_btn.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=10, padx=(5, 0))
+        self.add_queue_btn.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(8, 0))
         
         # Preview processed image (AFTER buttons)
-        preview_processed_frame = ttk.LabelFrame(center_panel, text="Preview Processed Image", padding="10")
+        preview_processed_frame = ttk.LabelFrame(center_panel, text="Preview Processed Image", padding="15")
         preview_processed_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
         
         self.processed_preview_label = tk.Label(
             preview_processed_frame, 
-            bg='lightgray', 
-            text="Preview will appear here after clicking 'Generate Preview'"
+            bg=CARD_BG, 
+            fg=ACCENT_COLOR,
+            text="✨ Preview will appear here after clicking 'Generate Preview'",
+            font=('SF Pro Display', 13),
+            borderwidth=0
         )
-        self.processed_preview_label.pack(fill=tk.BOTH, expand=True)
+        self.processed_preview_label.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
     
     def setup_queue_tab(self, parent):
         """Setup the queue management tab."""
