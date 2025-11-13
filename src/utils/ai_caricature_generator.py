@@ -82,6 +82,7 @@ class AICaricatureGenerator:
                 self.anthropic_client = anthropic.Anthropic(api_key=self.anthropic_key)
                 self.anthropic_model = self.anthropic_model_name
                 logger.info(f"Initialized Anthropic Claude ({self.anthropic_model})")
+                logger.info(f"Using API key starting with: {self.anthropic_key[:15]}...")
                 return True
                 
             elif provider == AIProvider.OPENAI and self.openai_key:
@@ -94,10 +95,13 @@ class AICaricatureGenerator:
             elif provider == AIProvider.GEMINI and self.gemini_key:
                 import google.generativeai as genai
                 genai.configure(api_key=self.gemini_key)
-                # For Gemini, append -image suffix if not already present
+                # Use the vision model for image processing
+                # Note: Gemini Flash 2.0 and newer models support vision natively
                 model_name = self.gemini_model_name
-                if 'image' not in model_name:
-                    model_name = f"{model_name}-image"
+                # Don't append -image suffix for Gemini 2.0+ models (they have vision built-in)
+                if not model_name.startswith('gemini-2.'):
+                    if 'image' not in model_name and 'vision' not in model_name:
+                        model_name = f"{model_name}-vision"
                 self.gemini_model = genai.GenerativeModel(model_name)
                 logger.info(f"Initialized Google Gemini ({model_name})")
                 return True
@@ -190,31 +194,38 @@ Create a description for a pen plotter that will make people smile and laugh whe
         """Generate description using Anthropic Claude (claude-3-5-sonnet-20241022)."""
         image_data = self.image_to_base64(image)
         
-        message = self.anthropic_client.messages.create(
-            model=self.anthropic_model,
-            max_tokens=1024,
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "image",
-                            "source": {
-                                "type": "base64",
-                                "media_type": "image/png",
-                                "data": image_data,
+        try:
+            message = self.anthropic_client.messages.create(
+                model=self.anthropic_model,
+                max_tokens=1024,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "image",
+                                "source": {
+                                    "type": "base64",
+                                    "media_type": "image/png",
+                                    "data": image_data,
+                                },
                             },
-                        },
-                        {
-                            "type": "text",
-                            "text": self._get_ai_prompt()
-                        }
-                    ],
-                }
-            ],
-        )
-        
-        return message.content[0].text
+                            {
+                                "type": "text",
+                                "text": self._get_ai_prompt()
+                            }
+                        ],
+                    }
+                ],
+            )
+            
+            return message.content[0].text
+        except Exception as e:
+            error_msg = str(e)
+            if "404" in error_msg or "not_found_error" in error_msg:
+                logger.error(f"Anthropic model '{self.anthropic_model}' not found. Your API key may not have access to this model.")
+                logger.error("Please check your API key at https://console.anthropic.com/ or try a different model.")
+            raise
     
     def _generate_with_openai(self, image: np.ndarray) -> str:
         """Generate description using OpenAI GPT-4o (gpt-4o)."""

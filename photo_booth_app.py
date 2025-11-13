@@ -810,19 +810,16 @@ class PhotoBoothApp:
             style = ImageStyle(self.style_var.get())
             ai_provider = self.ai_provider_var.get()
             
-            # Add to queue with already-processed image path
+            # Add to queue with PENDING_APPROVAL status (don't add to processing queue yet)
             job_id = self.print_queue.add_job(
                 name=name,
                 email=email,
                 image_path=str(processed_path),  # Use processed image, not original
                 style=style,
-                ai_provider=ai_provider
+                ai_provider=ai_provider,
+                status=JobStatus.PENDING_APPROVAL,
+                add_to_queue=False  # Don't add to processing queue until approved
             )
-            
-            # Set status to pending approval (requires manual approval before printing)
-            job = self.print_queue.get_job(job_id)
-            if job:
-                job.status = JobStatus.PENDING_APPROVAL
             
             # Save queue state
             self.print_queue.save_to_file(self.queue_file)
@@ -1066,9 +1063,11 @@ class PhotoBoothApp:
             if job and job.status == JobStatus.PENDING_APPROVAL:
                 job.approved_for_print = True
                 job.status = JobStatus.QUEUED
+                # Add job back to the processing queue
+                self.print_queue.queue.put(job_id)
                 self.print_queue.save_to_file(self.queue_file)
                 messagebox.showinfo("Approved", f"Job for {job.name} has been approved for printing!")
-                logger.info(f"Job {job_id} approved for printing")
+                logger.info(f"Job {job_id} approved for printing and added to processing queue")
             else:
                 messagebox.showwarning("Cannot Approve", "Only pending jobs can be approved")
     
@@ -1135,7 +1134,7 @@ class PhotoBoothApp:
                     
                     self.plotter = GRBLController(
                         port=port,
-                        baud_rate=baud
+                        baud=baud
                     )
                     
                     # Connect asynchronously

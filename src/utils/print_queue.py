@@ -115,10 +115,21 @@ class PrintQueue:
         email: str,
         image_path: str,
         style: ImageStyle,
-        ai_provider: str = "None (Canny)"
+        ai_provider: str = "None (Canny)",
+        status: JobStatus = JobStatus.QUEUED,
+        add_to_queue: bool = True
     ) -> str:
         """
         Add a new job to the queue.
+        
+        Args:
+            name: User's name
+            email: User's email
+            image_path: Path to the processed image
+            style: Image style (sketch, cartoon, etc.)
+            ai_provider: AI provider used
+            status: Initial job status (default: QUEUED)
+            add_to_queue: Whether to add to processing queue immediately (default: True)
         
         Returns:
             str: Job ID
@@ -132,13 +143,14 @@ class PrintQueue:
             image_path=image_path,
             style=style,
             ai_provider=ai_provider,
-            status=JobStatus.QUEUED,
+            status=status,
             created_at=time.time()
         )
         
         with self.lock:
             self.jobs[job_id] = job
-            self.queue.put(job_id)
+            if add_to_queue:
+                self.queue.put(job_id)
         
         logger.info(f"Added job {job_id} for {name} ({email})")
         self._notify_observers()
