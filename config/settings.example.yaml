@@ -26,8 +26,8 @@ plotter:
 
 servo:
   # Servo control settings
-  pen_up_command: "M3 S90"       # G-code for pen up
-  pen_down_command: "M5"         # G-code for pen down
+  pen_up_command: "M5"           # G-code for pen up (servo off/release)
+  pen_down_command: "M3 S90"     # G-code for pen down (servo activate)
   dwell_time: 0.15               # Seconds to wait after servo movement
   
   # Pen type profiles
@@ -98,6 +98,16 @@ logging:
   format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
   file: logs/ax5_plotter.log
   max_bytes: 10485760  # 10 MB
+
+email:
+  # Email settings for sending processed images
+  enabled: false  # Set to true to enable email delivery
+  smtp_server: smtp.gmail.com
+  smtp_port: 587
+  smtp_username: your_email@gmail.com
+  smtp_password: your_app_password  # Use app-specific password for Gmail
+  from_email: your_email@gmail.com
+  from_name: "AX5 Plotter Photo Booth"
   backup_count: 5
 
 auth:

@@ -1,0 +1,34 @@
+{
+  "jobs": [
+    {
+      "job_id": "f6d9b6d4-b0a4-4470-81f4-87377506630c",
+      "name": "rahul",
+      "email": "r.g.patel@accenture.com",
+      "image_path": "output/captures/capture_20251113_010415.jpg",
+      "style": "comic",
+      "ai_provider": "Anthropic Claude",
+      "status": "failed",
+      "created_at": 1763013855.376128,
+      "started_at": 1763013855.577172,
+      "completed_at": 1763013858.486079,
+      "error_message": "AICaricatureGenerator.__init__() got an unexpected keyword argument 'anthropic_api_key'",
+      "processed_image_path": null,
+      "gcode_path": null
+    },
+    {
+      "job_id": "807f6ec6-11ff-4c2b-bcf9-f7997f3f1dd2",
+      "name": "rahul",
+      "email": "rahulpatel052197@gmail.com",
+      "image_path": "output/processed/processed_20251113_171750.png",
+      "style": "comic",
+      "ai_provider": "Anthropic Claude",
+      "status": "failed",
+      "created_at": 1763072270.745068,
+      "started_at": 1763072272.676228,
+      "completed_at": 1763072275.151655,
+      "error_message": "expected str, bytes or os.PathLike object, not dict",
+      "processed_image_path": "output/saved_images/rahul_rahulpatel052197_at_gmail_com/comic_20251113_171755.png",
+      "gcode_path": null
+    }
+  ]
+}

@@ -305,16 +305,16 @@ Provide a brief description emphasizing SIMPLICITY and CLARITY for pen plotting.
         smooth = cv2.bilateralFilter(gray, 9, 75, 75)
         
         # Apply adaptive histogram equalization for better contrast
-        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
         enhanced = clahe.apply(smooth)
         
-        # Use moderate Canny thresholds for balanced detail
-        edges = cv2.Canny(enhanced, 50, 150)
+        # Use lower Canny thresholds for cleaner, bolder lines
+        edges = cv2.Canny(enhanced, 30, 90)
         
         logger.info(f"Edge pixels detected: {np.count_nonzero(edges)}")
         
-        # Dilate slightly to make lines more visible and connected
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2, 2))
+        # Dilate to make lines bolder and more connected
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
         edges = cv2.dilate(edges, kernel, iterations=1)
         
         # Close small gaps
