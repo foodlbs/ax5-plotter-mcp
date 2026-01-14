@@ -34,10 +34,30 @@ wheels/
 # Application
 config/settings.yaml
 logs/*.log
-output/*.gcode
+logs/*
+queue_state.json
+
+# Output directories (keep structure, ignore contents)
+output/captures/*
+output/processed/*
+output/gcode/*
+output/saved_images/*
+output/temp_processed/*
+output/test_captures/*
+output/test_processed/*
+!output/captures/.gitkeep
+!output/processed/.gitkeep
+!output/gcode/.gitkeep
+!output/saved_images/.gitkeep
+
 *.tmp
 
 # Temporary
 .DS_Store
 *.bak
 .ipynb_checkpoints/
+
+# API Keys (never commit)
+*.key
+.env
+*.secret

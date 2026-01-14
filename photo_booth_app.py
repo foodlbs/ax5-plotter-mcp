@@ -950,7 +950,7 @@ class PhotoBoothApp:
                 # Stream with progress callback
                 import asyncio
                 success = asyncio.run(
-                    self.plotter.stream_gcode(
+                    self.plotter.stream_gcode_file(
                         str(user_gcode_path),
                         progress_callback=self.on_streaming_progress
                     )

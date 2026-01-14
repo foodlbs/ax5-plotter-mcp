@@ -1,0 +1,19 @@
+# AX5 Plotter Photo Booth Dependencies
+
+# Core dependencies
+opencv-python>=4.8.0
+Pillow>=10.0.0
+numpy>=1.24.0
+PyYAML>=6.0
+
+# AI Processing (optional - only needed if using AI features)
+anthropic>=0.18.0
+openai>=1.12.0
+google-generativeai>=0.3.0
+
+# Serial communication (for plotter control)
+pyserial>=3.5
+
+# SVG processing
+svgpathtools>=1.6.0
+svgwrite>=1.4.3
